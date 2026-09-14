@@ -224,8 +224,9 @@ def test_drain_claims_then_processes_in_one_sweep(tmp_path, monkeypatch):
 
     assert captured.state == "done"
     assert already_pending.state == "done"
-    # 1 claim + 2 processed (the newly-claimed session included).
-    assert touched == 3
+    # Two sessions, not three transitions: the claimed one is counted once even
+    # though this sweep both claimed and processed it.
+    assert touched == 2
     assert set(worker.spool.unlinked) == {"s-captured", "s-pending"}
 
 

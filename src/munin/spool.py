@@ -191,6 +191,17 @@ class Segment:
     started_at: datetime
     stopped_at: datetime | None = None
     duration_seconds: float | None = None
+    #: What the app track actually recorded. ``"stream"`` is the meeting
+    #: application's own audio and nothing else. ``"sink-monitor"`` is the whole
+    #: desktop mix -- every other application, every notification sound -- taken
+    #: because the application's stream could not be bound. ``"silent"`` is a
+    #: generated silent track (an ad-hoc recording with no application).
+    #:
+    #: This is on the record because the three are not interchangeable: a
+    #: sink-monitor track may contain audio from people and applications that
+    #: were never part of the meeting, which is a GDPR and ISO 27001 question
+    #: about what was captured, not a capture-quality detail (spec 12).
+    app_source: str | None = None
 
     def to_dict(self) -> dict:
         return {
@@ -200,6 +211,7 @@ class Segment:
             "started_at": to_iso(self.started_at),
             "stopped_at": to_iso(self.stopped_at),
             "duration_seconds": self.duration_seconds,
+            "app_source": self.app_source,
         }
 
     @classmethod
@@ -214,6 +226,7 @@ class Segment:
             started_at=started,
             stopped_at=from_iso(data.get("stopped_at")),
             duration_seconds=data.get("duration_seconds"),
+            app_source=data.get("app_source"),
         )
 
 

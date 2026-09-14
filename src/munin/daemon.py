@@ -46,6 +46,7 @@ from munin.capture.base import (
     segment_filenames,
 )
 from munin.config import Config
+from munin.desktop import IdleInhibitor, get_idle_inhibitor
 from munin.ipc import AlreadyRunning, IpcError, Server, socket_path
 from munin.notify import Notification
 
@@ -60,9 +61,6 @@ POLL_INTERVAL = 1.0
 #: can tell a live daemon from a stale file. Elapsed time is still computed by
 #: the plugin from ``started_at``; no timer writes a *changing* field here.
 HEARTBEAT_SECONDS = 30.0
-
-#: Omarchy's idle service gates on this file (contracts section 12).
-STAY_AWAKE_STATE = "omarchy/indicators/stay-awake"
 
 #: The runtime states ``state.json`` may carry (contracts section 7.2).
 RUNTIME_STATES: tuple[str, ...] = (
@@ -93,22 +91,19 @@ def _iso(value: datetime | None) -> str | None:
 def _state_file(explicit: Path | str | None = None) -> Path:
     """``$XDG_RUNTIME_DIR/munin/state.json``.
 
-    Resolved through :mod:`munin.paths` where that is implemented, with the same
-    local fallback :func:`munin.ipc.socket_path` uses, so the daemon runs before
-    the spool workstream lands.
+    :mod:`munin.paths` owns the rule. It raises when ``XDG_RUNTIME_DIR`` is
+    unset, which the daemon reports as an internal error rather than falling
+    back to ``/tmp`` -- a state file that survives a reboot would tell the bar
+    a recording is live when no daemon is running.
     """
     if explicit is not None:
         return Path(explicit)
-    try:
-        from munin import paths
+    from munin import paths
 
+    try:
         return paths.state_path()
-    except (NotImplementedError, ImportError):
-        pass
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    if not runtime:
-        raise IpcError("internal", "XDG_RUNTIME_DIR is not set")
-    return Path(runtime) / "munin" / "state.json"
+    except RuntimeError as exc:
+        raise IpcError("internal", str(exc)) from exc
 
 
 def _write_atomic(path: Path, payload: str) -> None:
@@ -229,6 +224,10 @@ class SilentCapturer(Capturer):
             "mic": self.mic.label,
             "app": self.app.label if self.app else "none",
             "encoder": "ffmpeg-libopus (silence)",
+            # Honest about what is on the app track, so a developer exercising
+            # MUNIN_FAKE_CAPTURE sees a populated app_source rather than the
+            # null that means "unknown" (contracts section 3).
+            "app_source": "silent",
         }
 
 
@@ -267,6 +266,7 @@ class Daemon:
         clock: Callable[[], datetime] | None = None,
         detector: Any | None = None,
         idle_runner: Runner | None = None,
+        idle_inhibitor: IdleInhibitor | None = None,
         socket_path_override: Path | None = None,
         state_path_override: Path | None = None,
     ) -> None:
@@ -277,6 +277,9 @@ class Daemon:
         self.capturer_factory = capturer_factory or _default_capturer_factory(config)
         self.notifier = notifier or self._default_notifier
         self.idle_runner = idle_runner or _run_quiet
+        # Platform-free: which command holds the session awake lives in
+        # munin.desktop, alongside capture/ and detect/ (spec 16.5).
+        self.idle_inhibitor = idle_inhibitor or get_idle_inhibitor()(self.idle_runner)
         self._detector = detector
         self._socket_path = socket_path_override
         self._state_path = state_path_override
@@ -637,35 +640,27 @@ class Daemon:
             self._refresh_idle_state()
 
     def inhibit_idle(self, on: bool) -> None:
-        """Hold ``omarchy-toggle-idle stay-awake`` for the recording's duration.
+        """Keep the session awake for the recording's duration.
 
-        Records whether stay-awake was already set before touching it and
-        restores that prior state on stop, so a user who keeps the machine awake
-        permanently does not lose it when a recording ends.
+        Records whether the session was already being held awake before touching
+        it and restores that prior state on stop, so a user who keeps the machine
+        awake permanently does not lose it when a recording ends. Which command
+        does the holding is the platform's business (:mod:`munin.desktop`).
         """
         if not self.config.idle.inhibit:
             return
         if on:
-            self.state.idle_was_inhibited = _stay_awake_is_set()
+            self.state.idle_was_inhibited = self.idle_inhibitor.is_inhibited()
             if self.state.idle_was_inhibited:
-                log.info("stay-awake was already held; leaving it alone")
+                log.info("idle was already inhibited; leaving it alone")
                 return
-            self._toggle_idle("stay-awake")
+            self.idle_inhibitor.inhibit()
         else:
             if self.state.idle_was_inhibited:
-                log.info("stay-awake was held before this recording; leaving it held")
+                log.info("idle was inhibited before this recording; leaving it held")
             else:
-                self._toggle_idle("allow-idle")
+                self.idle_inhibitor.release()
             self.state.idle_was_inhibited = False
-
-    def _toggle_idle(self, mode: str) -> None:
-        try:
-            code = self.idle_runner(["omarchy-toggle-idle", mode])
-        except Exception as exc:  # noqa: BLE001 - never take a recording down
-            log.warning("idle toggle failed mode=%s error=%s", mode, exc)
-            return
-        if code != 0:
-            log.warning("idle toggle exited %d mode=%s", code, mode)
 
     def run(self) -> int:
         """Bind the socket, write ``state.json``, serve until SIGTERM."""
@@ -806,6 +801,11 @@ class Daemon:
             segment = segments[-1]
             segment.stopped_at = result.stopped_at
             segment.duration_seconds = result.duration_seconds
+            # What the app track actually holds. A capturer that had to fall
+            # back to the desktop mix ("sink-monitor") recorded more than this
+            # meeting, and session.json has to say so -- it is the record of
+            # what was captured, and a reader cannot infer it from the audio.
+            segment.app_source = _describe_app_source(capturer)
         session.stopped_at = now
         session.duration_seconds = sum(
             float(getattr(seg, "duration_seconds", 0.0) or 0.0) for seg in segments
@@ -990,6 +990,25 @@ class Daemon:
 
 
 # --- defaults and entry point -------------------------------------------
+def _describe_app_source(capturer: Capturer | None) -> str | None:
+    """The capturer's ``app_source``, via the frozen ``describe()`` seam.
+
+    ``describe()`` returns flat strings by contract (section 5), so this asks
+    for a documented key rather than reaching for a platform attribute. A
+    capturer that does not report one leaves the field null, which reads as
+    "unknown", never as "isolated".
+    """
+    if capturer is None:
+        return None
+    try:
+        described = capturer.describe()
+    except Exception as exc:  # noqa: BLE001 - never fail a stop over metadata
+        log.warning("could not describe the capturer error=%s", exc)
+        return None
+    value = described.get("app_source")
+    return str(value) if value else None
+
+
 def _run_quiet(argv: Sequence[str]) -> int:
     completed = subprocess.run(  # noqa: S603 - fixed argv, no shell
         list(argv),
@@ -999,11 +1018,6 @@ def _run_quiet(argv: Sequence[str]) -> int:
         check=False,
     )
     return completed.returncode
-
-
-def _stay_awake_is_set() -> bool:
-    state_home = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
-    return (Path(state_home) / STAY_AWAKE_STATE).exists()
 
 
 def _default_spool(config: Config) -> Any:
@@ -1033,15 +1047,10 @@ def _default_capturer_factory(config: Config) -> CapturerFactory:
 
 
 def load_config() -> Config:
-    """The config, or defaults while ``munin.config.load`` is still a stub."""
+    """The config. A missing file is not an error; every key has a default."""
     from munin import config as config_module
 
-    try:
-        return config_module.load()
-    except NotImplementedError:
-        home = Path(os.environ.get("MUNIN_HOME") or (Path.home() / "munin"))
-        log.warning("munin.config.load is not implemented yet; using defaults home=%s", home)
-        return Config(home=home)
+    return config_module.load()
 
 
 def configure_logging(config: Config, *, level: int = logging.INFO) -> None:

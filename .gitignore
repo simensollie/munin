@@ -2,3 +2,6 @@
 __pycache__/
 *.egg-info/
 *.pyc
+
+# Harness-owned worktrees for the parallel workstreams; never part of the repo.
+.claude/

@@ -19,6 +19,7 @@ import pytest
 
 from munin.config import Config
 from munin.setup import (
+    DEFAULT_CONFIG_TOML,
     audio_sources,
     default_source_name,
     ensure_home,
@@ -126,7 +127,15 @@ def test_set_config_value_keeps_the_comments(tmp_path: Path) -> None:
     assert changed is True
     text = path.read_text(encoding="utf-8")
     assert 'mic_source   = "alsa_input.synthetic-mic"' in text
-    assert "# refuse to start a recording below this" in text
+    # Every comment line of the canonical template survives a rewrite: the file
+    # is hand-edited, so setup must not reduce it to bare keys. Asserted against
+    # the template itself rather than a quoted line, so the two cannot drift.
+    comments = [
+        line for line in DEFAULT_CONFIG_TOML.splitlines() if line.startswith("#")
+    ]
+    assert comments, "the canonical template is expected to carry comments"
+    for line in comments:
+        assert line in text
     assert text.count("[capture]") == before.count("[capture]")
     assert _load(path)["capture"]["mic_source"] == "alsa_input.synthetic-mic"
 

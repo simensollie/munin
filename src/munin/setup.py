@@ -46,72 +46,15 @@ __all__ = [
 
 TEST_SECONDS = 10
 
-#: Fallback copy of the schema in PoC contracts section 9, used when
-#: :data:`munin.config.DEFAULT_CONFIG_TOML` is empty. The config module owns the
-#: canonical text; this exists so a half-built tree still writes a valid file.
-DEFAULT_CONFIG_TOML = '''\
-# Munin configuration. Every key here is also the default, so deleting a line
-# changes nothing. See docs/superpowers/specs/2026-09-14-poc-contracts.md, 9.
-
-[munin]
-home = "~/munin"
-
-[paths]
-recordings = "recordings"
-inbox      = "inbox"
-voices     = "voices"
-log        = "munin.log"
-
-[pensieve]
-raw_dir = "~/pensieve/raw"
-
-[capture]
-mic_source   = "default"   # "default", a PipeWire node name, or an object.serial
-bitrate_kbps = 24
-channels     = 1
-sample_rate  = 48000
-min_free_mb  = 2048        # refuse to start a recording below this
-
-[detection]
-enabled               = true
-source                = "plugin"   # plugin | daemon | off
-poll_seconds          = 3          # source = "daemon" only
-grace_seconds         = 120        # auto-stop this long after the app stream goes
-warn_seconds          = 60         # warn this far into the grace period
-resume_window_seconds = 600
-
-[[detection.apps]]
-app_id      = "teams-native"
-label       = "Microsoft Teams"
-client_name = "Teams"
-
-[[detection.apps]]
-app_id       = "teams-pwa"
-label        = "Microsoft Teams"
-window_class = "chrome-teams.microsoft.com__-Default"
-
-[[detection.apps]]
-app_id                = "teams-tab"
-label                 = "Microsoft Teams"
-window_title_contains = "Microsoft Teams"
-
-[transcribe]
-backend  = "none"          # the PoC ships no transcription backend
-fallback = []
-
-[idle]
-inhibit = true
-method  = "omarchy-stay-awake"
-
-[notifications]
-enabled = true
-glyph   = "\U000f0ec2"
-'''
+#: Re-exported from :mod:`munin.config`, which owns the canonical template.
+#: ``munin setup`` and ``install.sh`` write exactly what ``config.load`` parses,
+#: so the two can never drift (PoC contracts section 9).
+DEFAULT_CONFIG_TOML = config_module.DEFAULT_CONFIG_TOML
 
 
 def _default_config_text() -> str:
-    text = getattr(config_module, "DEFAULT_CONFIG_TOML", "") or ""
-    return text if text.strip() else DEFAULT_CONFIG_TOML
+    """The canonical template, read at call time so a test can monkeypatch it."""
+    return config_module.DEFAULT_CONFIG_TOML
 
 
 # ---------------------------------------------------------------------------

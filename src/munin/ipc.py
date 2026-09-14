@@ -90,25 +90,19 @@ class AlreadyRunning(IpcError):
 def socket_path(explicit: Path | str | None = None) -> Path:
     """``$XDG_RUNTIME_DIR/munin/rec.sock``, or ``explicit`` when given.
 
-    Resolved through :mod:`munin.paths` when that module is implemented, with a
-    local fallback so the daemon is runnable while the spool workstream is still
-    in flight. The fallback computes the same path the contract fixes.
+    :mod:`munin.paths` owns the rule; this is the only place the daemon asks.
+    ``paths.runtime_dir`` raises when ``XDG_RUNTIME_DIR`` is unset, which for a
+    caller of this module means exactly "there is no socket to reach" -- so it
+    is translated into :class:`DaemonUnreachable` and the CLI exits 3.
     """
     if explicit is not None:
         return Path(explicit)
-    try:
-        from munin import paths
+    from munin import paths
 
+    try:
         return paths.socket_path()
-    except (NotImplementedError, ImportError):
-        pass
-    runtime = os.environ.get("XDG_RUNTIME_DIR", "")
-    if not runtime:
-        raise DaemonUnreachable(
-            "internal",
-            "XDG_RUNTIME_DIR is not set, so the daemon socket has no home",
-        )
-    return Path(runtime) / "munin" / "rec.sock"
+    except RuntimeError as exc:
+        raise DaemonUnreachable("internal", str(exc)) from exc
 
 
 @dataclass(frozen=True)

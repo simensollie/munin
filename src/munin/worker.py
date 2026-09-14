@@ -183,16 +183,33 @@ class Worker:
         sleep loop inside ``drain`` itself.
         """
         del once  # see docstring
-        touched = 0
+        backend = get_backend(self.config.transcribe.backend)
+        available = backend.available()
+        # Distinct sessions, not transitions: a session that is claimed and then
+        # processed in the same sweep was one session's worth of work, and the
+        # docstring promises sessions.
+        touched: set[str] = set()
         for session in list(self.spool.iter_sessions()):
             if session.state == "captured":
                 self.claim(session)
-                touched += 1
+                touched.add(session.id)
         for session in list(self.spool.iter_sessions()):
-            if session.state == "pending":
-                self.process(session)
-                touched += 1
-        return touched
+            if session.state != "pending":
+                continue
+            if session.pending_reason and not available:
+                # Already queued, with the reason on the record, and nothing has
+                # changed since. Re-running the backend would re-walk
+                # pending -> transcribing -> pending and append two rows to
+                # history[] every sweep -- and history[] is the audit trail, is
+                # append-only and is never trimmed (spec 12). munin-work runs on
+                # a timer, and the PoC's *designed* end state is exactly this
+                # one, so without this guard every proof-of-concept session
+                # grows session.json without bound. The session is retried the
+                # moment a backend reports itself available.
+                continue
+            self.process(session)
+            touched.add(session.id)
+        return len(touched)
 
 
 def _install_stop_handler() -> "list[bool]":

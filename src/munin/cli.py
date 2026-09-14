@@ -110,6 +110,13 @@ def build_parser() -> argparse.ArgumentParser:
 
     setup = sub.add_parser("setup", help="create the data root and a default config")
     setup.add_argument("--non-interactive", action="store_true")
+    # install.sh step 7 calls this: create the root and write config.toml, then
+    # stop -- no microphone question and no test recording during an install.
+    setup.add_argument(
+        "--write-default-config",
+        action="store_true",
+        help="create the data root and config.toml, then exit (used by install.sh)",
+    )
 
     daemon = sub.add_parser("daemon", help="run munin-rec")
     daemon.add_argument("--foreground", action="store_true", default=True)
@@ -243,31 +250,19 @@ def _cmd_event(args: argparse.Namespace) -> int:
 def _cmd_doctor(args: argparse.Namespace) -> int:
     from munin import doctor
 
-    config = _config()
-    try:
-        return int(doctor.main(config, as_json=bool(args.json)))
-    except NotImplementedError:
-        print(
-            "munin doctor is not implemented in this build "
-            "(the install workstream owns it)",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
+    return int(doctor.main(_config(), as_json=bool(args.json)))
 
 
 def _cmd_setup(args: argparse.Namespace) -> int:
     from munin import setup
 
-    config = _config()
-    try:
-        return int(setup.main(config, non_interactive=bool(args.non_interactive)))
-    except NotImplementedError:
-        print(
-            "munin setup is not implemented in this build "
-            "(the install workstream owns it)",
-            file=sys.stderr,
+    return int(
+        setup.main(
+            _config(),
+            non_interactive=bool(args.non_interactive),
+            write_config_only=bool(args.write_default_config),
         )
-        return EXIT_ERROR
+    )
 
 
 def _cmd_daemon(args: argparse.Namespace) -> int:
@@ -287,15 +282,7 @@ def _cmd_worker(args: argparse.Namespace) -> int:
         passthrough.append("--once")
     if args.interval is not None:
         passthrough += ["--interval", str(args.interval)]
-    try:
-        return int(worker.main(passthrough))
-    except NotImplementedError:
-        print(
-            "munin worker is not implemented in this build "
-            "(the worker workstream owns it)",
-            file=sys.stderr,
-        )
-        return EXIT_ERROR
+    return int(worker.main(passthrough))
 
 
 def _config() -> Any:
