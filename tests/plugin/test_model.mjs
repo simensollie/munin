@@ -1,0 +1,401 @@
+// Tests for plugin/local.munin/Model.js.
+//
+// Run with:  node tests/plugin/test_model.mjs
+//
+// There is no QML test runner on this machine and `qs` needs a compositor, so
+// the pure half of the plugin is tested here instead: state parsing, the
+// seven bar states, elapsed formatting, the three-shape detection table and
+// the started/ended diff. Everything that needs PipeWire or a running shell
+// is a live check, described in plugin/local.munin/README.md.
+//
+// Deliberately dependency-free: node:test and node:assert only, so this runs
+// on the system node with nothing installed.
+
+import test from "node:test";
+import assert from "node:assert/strict";
+import { loadModel } from "./model_shim.mjs";
+
+const M = loadModel();
+
+// A fixed instant, so nothing here depends on when it runs.
+const T0 = Date.parse("2026-09-14T13:25:08+02:00");
+
+function stateJson(over = {}) {
+  return JSON.stringify(
+    Object.assign(
+      {
+        schema_version: 1,
+        state: "recording",
+        since: "2026-09-14T13:25:08+02:00",
+        started_at: "2026-09-14T13:25:08+02:00",
+        title: "Weekly quality sync",
+        session: "/home/user/munin/recordings/2026/09/2026-09-14T1325-weekly-quality-sync",
+        session_id: "2026-09-14T1325-weekly-quality-sync",
+        segment: 1,
+        detected_app: { app_id: "teams-tab", label: "Microsoft Teams", pid: 37022 },
+        grace_deadline: null,
+        queue_depth: 2,
+        last_error: null,
+        updated_at: "2026-09-14T13:25:08+02:00",
+        daemon_pid: 4211,
+      },
+      over,
+    ),
+  );
+}
+
+// ------------------------------------------------------------- parseState
+
+test("parseState reads the contract's state.json", () => {
+  const v = M.parseState(stateJson());
+  assert.equal(v.loaded, true);
+  assert.equal(v.state, "recording");
+  assert.equal(v.title, "Weekly quality sync");
+  assert.equal(v.session_id, "2026-09-14T1325-weekly-quality-sync");
+  assert.equal(v.segment, 1);
+  assert.equal(v.queue_depth, 2);
+  assert.equal(v.daemon_pid, 4211);
+  assert.deepEqual(v.detected_app, {
+    app_id: "teams-tab",
+    label: "Microsoft Teams",
+    pid: 37022,
+  });
+});
+
+test("parseState never throws on junk, it degrades to idle", () => {
+  for (const bad of ["", "   ", "{", "null", "[]", "not json at all", undefined]) {
+    const v = M.parseState(bad);
+    assert.equal(v.state, "idle", `input: ${JSON.stringify(bad)}`);
+    assert.equal(v.loaded, false);
+    assert.equal(v.queue_depth, 0);
+  }
+});
+
+test("parseState rejects a state name outside the contract", () => {
+  assert.equal(M.parseState(stateJson({ state: "uploading" })).state, "idle");
+});
+
+test("parseState never yields a null title", () => {
+  assert.equal(M.parseState(stateJson({ title: null })).title, "");
+});
+
+// ---------------------------------------------------------- effectiveState
+
+test("done expires after 30 s and reads as idle", () => {
+  const json = stateJson({ state: "done", since: "2026-09-14T13:25:08+02:00" });
+  const v = M.parseState(json);
+  assert.equal(M.effectiveState(v, T0 + 10_000), "done");
+  assert.equal(M.effectiveState(v, T0 + 29_000), "done");
+  assert.equal(M.effectiveState(v, T0 + 31_000), "idle");
+});
+
+test("failed never expires -- a failure that hides itself is a lost meeting", () => {
+  const v = M.parseState(stateJson({ state: "failed", since: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(M.effectiveState(v, T0 + 86_400_000), "failed");
+});
+
+// ---------------------------------------------------------------- time
+
+test("elapsedSeconds counts from an offset timestamp", () => {
+  assert.equal(M.elapsedSeconds("2026-09-14T13:25:08+02:00", T0 + 42 * 1000), 42);
+  assert.equal(M.elapsedSeconds("2026-09-14T11:25:08+00:00", T0 + 42 * 1000), 42);
+});
+
+test("elapsedSeconds returns -1 for an unreadable timestamp and never goes negative", () => {
+  assert.equal(M.elapsedSeconds(null, T0), -1);
+  assert.equal(M.elapsedSeconds("whenever", T0), -1);
+  assert.equal(M.elapsedSeconds("2026-09-14T13:25:08+02:00", T0 - 5000), 0);
+});
+
+test("formatElapsed is HH:MM:SS with unbounded hours", () => {
+  assert.equal(M.formatElapsed(0), "00:00:00");
+  assert.equal(M.formatElapsed(42 * 60 + 11), "00:42:11");
+  assert.equal(M.formatElapsed(3600), "01:00:00");
+  assert.equal(M.formatElapsed(26 * 3600 + 4 * 60 + 11), "26:04:11");
+});
+
+test("formatElapsedShort drops the hour field under an hour", () => {
+  assert.equal(M.formatElapsedShort(42 * 60 + 11), "42:11");
+  assert.equal(M.formatElapsedShort(3600 + 14 * 60), "1:14:00");
+});
+
+test("formatDuration reads as words", () => {
+  assert.equal(M.formatDuration(9), "9 s");
+  assert.equal(M.formatDuration(52 * 60), "52 min");
+  assert.equal(M.formatDuration(3600 + 14 * 60), "1 h 14 min");
+  assert.equal(M.formatDuration(7200), "2 h");
+  assert.equal(M.formatDuration(3600 + 3599), "2 h");
+});
+
+// ----------------------------------------------------------------- bar
+
+test("the seven states of spec 9.2 each render one way", () => {
+  assert.equal(M.visible("idle"), false);
+  for (const s of ["detected", "recording", "ending", "captured", "transcribing", "done", "failed"]) {
+    assert.equal(M.visible(s), true, s);
+  }
+
+  assert.equal(M.barGlyph("detected"), M.GLYPH_DETECTED);
+  assert.equal(M.barGlyph("recording"), "");
+  assert.equal(M.barGlyph("ending"), "");
+  assert.equal(M.barGlyph("transcribing"), M.GLYPH_WORKING);
+  assert.equal(M.barGlyph("done"), M.GLYPH_DONE);
+  assert.equal(M.barGlyph("failed"), M.GLYPH_FAILED);
+
+  assert.equal(M.barShowsDot("recording"), true);
+  assert.equal(M.barShowsDot("ending"), true);
+  assert.equal(M.barShowsDot("detected"), false);
+
+  assert.equal(M.barPulses("recording"), true);
+  assert.equal(M.barPulses("ending"), false);
+
+  assert.equal(M.barSpins("transcribing"), true);
+  assert.equal(M.barSpins("captured"), true);
+  assert.equal(M.barSpins("done"), false);
+
+  assert.equal(M.barTone("recording"), "urgent");
+  assert.equal(M.barTone("ending"), "urgent");
+  assert.equal(M.barTone("failed"), "urgent");
+  assert.equal(M.barTone("detected"), "dim");
+  assert.equal(M.barTone("transcribing"), "foreground");
+});
+
+test("the identity glyph is U+F0EC2, the ScreenRecording.qml precedent", () => {
+  assert.equal(M.GLYPH.codePointAt(0), 0xf0ec2);
+  assert.equal([...M.GLYPH].length, 1);
+});
+
+test("barLabel says the right thing in each state", () => {
+  const rec = M.parseState(stateJson());
+  assert.equal(M.barLabel(rec, T0 + (42 * 60 + 11) * 1000), "00:42:11");
+
+  const det = M.parseState(stateJson({ state: "detected", started_at: null }));
+  assert.equal(M.barLabel(det, T0), "Microsoft Teams");
+
+  const work = M.parseState(stateJson({ state: "transcribing", queue_depth: 2 }));
+  assert.equal(M.barLabel(work, T0), "2 queued");
+
+  const done = M.parseState(stateJson({ state: "done" }));
+  assert.equal(M.barLabel(done, T0), "Transcript ready");
+  assert.equal(M.barLabel(done, T0 + 31_000), "");
+
+  const failed = M.parseState(stateJson({ state: "failed" }));
+  assert.equal(M.barLabel(failed, T0), "Retry");
+});
+
+test("tooltip in failed carries the daemon's reason", () => {
+  const v = M.parseState(stateJson({ state: "failed", last_error: "no space left" }));
+  assert.equal(M.tooltipText(v, T0), "Failed: no space left");
+});
+
+// --------------------------------------------------------------- actions
+
+test("the primary action follows the state", () => {
+  assert.deepEqual(M.primaryAction("idle"), { label: "Record", argv: ["munin", "start"] });
+  assert.deepEqual(M.primaryAction("detected"), {
+    label: "Record",
+    argv: ["munin", "start", "--from-detection"],
+  });
+  assert.deepEqual(M.primaryAction("recording"), {
+    label: "Stop and transcribe",
+    argv: ["munin", "stop"],
+  });
+  assert.deepEqual(M.primaryAction("ending"), {
+    label: "Stop and transcribe",
+    argv: ["munin", "stop"],
+  });
+  assert.deepEqual(M.primaryAction("done"), {
+    label: "Resume",
+    argv: ["munin", "start", "--resume"],
+  });
+});
+
+test("muninArgv keeps a hostile window title as one literal argument", () => {
+  const title = '$(rm -rf ~) "; reboot #';
+  const argv = M.muninArgv(["munin", "event", "call-started", "--title", title]);
+  assert.deepEqual(argv.slice(0, 4), ["bash", "-lc", 'exec "$@"', "bash"]);
+  assert.equal(argv[argv.length - 1], title);
+  assert.equal(argv.length, 9);
+});
+
+// -------------------------------------------------------------- sessions
+
+test("parseSessions reads the CLI's list payload", () => {
+  const payload = JSON.stringify({
+    sessions: [
+      {
+        id: "2026-09-14T1325-weekly-quality-sync",
+        state: "pending",
+        title: "Weekly quality sync",
+        started_at: "2026-09-14T13:25:08+02:00",
+        duration_seconds: 3140,
+        path: "/home/user/munin/recordings/2026/09/2026-09-14T1325-weekly-quality-sync",
+        pending_reason: "no transcription backend configured",
+      },
+    ],
+  });
+  const list = M.parseSessions(payload);
+  assert.equal(list.length, 1);
+  assert.equal(list[0].title, "Weekly quality sync");
+  assert.equal(list[0].duration_seconds, 3140);
+  assert.match(M.sessionMeta(list[0]), /52 min/);
+  assert.match(M.sessionMeta(list[0]), /no transcription backend configured/);
+});
+
+test("parseSessions survives junk and a missing title", () => {
+  assert.deepEqual(M.parseSessions("nonsense"), []);
+  assert.deepEqual(M.parseSessions('{"sessions": null}'), []);
+  const list = M.parseSessions('{"sessions": [{"id": "adhoc-1", "state": "pending"}]}');
+  assert.equal(list[0].title, "adhoc-1");
+});
+
+// ------------------------------------------------------------- detection
+
+test("identify implements the three-shape table in match order", () => {
+  // Native teams-for-linux: PipeWire alone is enough.
+  assert.deepEqual(M.identify("Teams", "teams-for-linux", "Chat | Teams", null), {
+    app_id: "teams-native",
+    label: "Microsoft Teams",
+    matched_by: "pipewire",
+  });
+
+  // Installed PWA: PipeWire says Chromium, the window class identifies it.
+  assert.deepEqual(
+    M.identify("Chromium", "chrome-teams.microsoft.com__-Default", "Calendar", null),
+    { app_id: "teams-pwa", label: "Microsoft Teams", matched_by: "window_class" },
+  );
+
+  // Browser tab: only the title, and case-insensitively.
+  assert.deepEqual(M.identify("Chromium", "google-chrome", "Call | microsoft TEAMS", null), {
+    app_id: "teams-tab",
+    label: "Microsoft Teams",
+    matched_by: "window_title",
+  });
+});
+
+test("identify returns null for a call that is not a known app", () => {
+  assert.equal(M.identify("Chromium", "google-chrome", "Some video", null), null);
+  assert.equal(M.identify("", "", "", null), null);
+});
+
+test("identify tries every rule's PipeWire name before any window class", () => {
+  // A rule list where the title rule comes first: the PipeWire stage still
+  // wins, which is the whole point of running the stages in order.
+  const rules = [
+    { app_id: "beacon-tab", label: "Beacon 365", window_title_contains: "Beacon" },
+    { app_id: "beacon-native", label: "Beacon 365", client_name: "Beacon" },
+  ];
+  assert.equal(M.identify("Beacon", "x", "Beacon 365 call", rules).app_id, "beacon-native");
+});
+
+test("liveCalls is condition 1: a playback and a capture stream on one owner", () => {
+  const owners = {
+    "pid:37022": {
+      pid: 37022,
+      client_name: "Chromium",
+      playback: true,
+      capture: true,
+      playback_handle: "91",
+    },
+    "pid:41000": { pid: 41000, client_name: "mpv", playback: true, capture: false },
+    "client:12": { pid: 0, client_name: "pw-cat", playback: false, capture: true },
+  };
+  const calls = M.liveCalls(owners);
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].pid, 37022);
+  assert.equal(calls[0].playback_handle, "91");
+});
+
+test("liveCalls keeps an owner PipeWire gave no pid for", () => {
+  const calls = M.liveCalls({
+    "client:12": { pid: 0, client_name: "Teams", playback: true, capture: true },
+  });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].key, "client:12");
+  assert.equal(calls[0].pid, 0);
+});
+
+test("diffCalls fires once per transition, not once per scan", () => {
+  const a = { key: "pid:1" };
+  const b = { key: "pid:2" };
+
+  let d = M.diffCalls([], [a]);
+  assert.deepEqual(d.started.map((c) => c.key), ["pid:1"]);
+  assert.deepEqual(d.ended, []);
+
+  d = M.diffCalls([a], [a]);
+  assert.deepEqual(d.started, []);
+  assert.deepEqual(d.ended, []);
+
+  d = M.diffCalls([a], [a, b]);
+  assert.deepEqual(d.started.map((c) => c.key), ["pid:2"]);
+
+  d = M.diffCalls([a, b], [b]);
+  assert.deepEqual(d.ended.map((c) => c.key), ["pid:1"]);
+
+  d = M.diffCalls([a], []);
+  assert.deepEqual(d.ended.map((c) => c.key), ["pid:1"]);
+});
+
+test("callEventArgv omits a pid PipeWire did not publish", () => {
+  const withPid = M.callEventArgv(
+    "call-started",
+    { key: "pid:37022", pid: 37022 },
+    { app_id: "teams-tab" },
+    "Call | Microsoft Teams",
+  );
+  assert.deepEqual(withPid, [
+    "munin",
+    "event",
+    "call-started",
+    "--pid",
+    "37022",
+    "--app",
+    "teams-tab",
+    "--title",
+    "Call | Microsoft Teams",
+  ]);
+
+  const withoutPid = M.callEventArgv("call-started", { key: "client:12", pid: 0 }, null, "");
+  assert.deepEqual(withoutPid, ["munin", "event", "call-started"]);
+
+  // call-ended carries no title: the daemon already knows the session.
+  const ended = M.callEventArgv("call-ended", { pid: 37022 }, null, "Call | Microsoft Teams");
+  assert.deepEqual(ended, ["munin", "event", "call-ended", "--pid", "37022"]);
+});
+
+// --------------------------------------------------------- shape contract
+
+test("Model.js exports every function the QML calls", () => {
+  for (const name of [
+    "parseState",
+    "emptyState",
+    "effectiveState",
+    "elapsedSeconds",
+    "formatElapsed",
+    "formatElapsedShort",
+    "formatDuration",
+    "formatClock",
+    "visible",
+    "barGlyph",
+    "barTone",
+    "barPulses",
+    "barShowsDot",
+    "barSpins",
+    "barLabel",
+    "tooltipText",
+    "primaryAction",
+    "muninArgv",
+    "parseSessions",
+    "sessionGlyph",
+    "sessionMeta",
+    "identify",
+    "liveCalls",
+    "diffCalls",
+    "callEventArgv",
+  ]) {
+    assert.equal(typeof M[name], "function", name);
+  }
+  assert.equal(M.STATES.length, 8);
+  assert.equal(M.DEFAULT_APP_RULES.length, 3);
+});
