@@ -1,0 +1,239 @@
+[
+  {
+    "id": 32,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "application.language": "en_US.UTF-8",
+        "application.name": "WirePlumber",
+        "application.process.binary": "wireplumber",
+        "application.process.host": "workstation",
+        "application.process.id": 1124,
+        "application.process.user": "munin",
+        "client.api": "pipewire",
+        "core.version": "1.6.8",
+        "module.id": 2,
+        "object.id": 32,
+        "object.serial": 32,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native"
+      }
+    }
+  },
+  {
+    "id": 40,
+    "type": "PipeWire:Interface:Metadata",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "props": {
+      "client.id": 32,
+      "metadata.name": "default",
+      "object.serial": 40
+    },
+    "metadata": [
+      {
+        "subject": 0,
+        "key": "default.audio.sink",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "alsa_output.pci-0000_00_1f.3.analog-stereo"
+        }
+      },
+      {
+        "subject": 0,
+        "key": "default.audio.source",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "alsa_input.usb-Synthetic_Headset-00.mono-fallback"
+        }
+      }
+    ]
+  },
+  {
+    "id": 56,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "media.class": "Audio/Source",
+        "node.description": "Synthetic Headset Mono",
+        "node.name": "alsa_input.usb-Synthetic_Headset-00.mono-fallback",
+        "node.nick": "Synthetic Headset Mono",
+        "object.id": 56,
+        "object.serial": 56,
+        "factory.name": "api.alsa.pcm.source"
+      }
+    }
+  },
+  {
+    "id": 57,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.description": "Built-in Audio Analog Stereo",
+        "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+        "node.nick": "Built-in Audio Analog Stereo",
+        "object.id": 57,
+        "object.serial": 57,
+        "factory.name": "api.alsa.pcm.sink"
+      }
+    }
+  },
+  {
+    "id": 58,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "media.class": "Audio/Source",
+        "node.description": "Built-in Audio Analog Stereo",
+        "node.name": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+        "node.nick": "Built-in Audio Analog Stereo",
+        "object.id": 58,
+        "object.serial": 58,
+        "factory.name": "api.alsa.pcm.source"
+      }
+    }
+  },
+  {
+    "id": 63,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "application.language": "en_US.UTF-8",
+        "application.name": "quickshell",
+        "application.process.binary": "quickshell",
+        "application.process.host": "workstation",
+        "application.process.id": 2201,
+        "application.process.user": "munin",
+        "client.api": "pipewire",
+        "core.version": "1.6.8",
+        "module.id": 2,
+        "object.id": 63,
+        "object.serial": 136,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native"
+      }
+    }
+  },
+  {
+    "id": 90,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "client.id": 63,
+        "media.category": "Capture",
+        "media.class": "Stream/Input/Audio",
+        "media.name": "quickshell",
+        "media.role": "Communication",
+        "media.type": "Audio",
+        "node.autoconnect": true,
+        "node.driver-id": 56,
+        "node.name": "quickshell",
+        "node.rate": "1/48000",
+        "node.want-driver": true,
+        "object.id": 90,
+        "object.register": false,
+        "object.serial": 900,
+        "port.group": "stream.0",
+        "stream.is-live": true
+      }
+    }
+  },
+  {
+    "id": 104,
+    "type": "PipeWire:Interface:Client",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "application.language": "en_US.UTF-8",
+        "application.name": "Chromium",
+        "application.process.binary": "chrome",
+        "application.process.host": "workstation",
+        "application.process.id": 4410,
+        "application.process.user": "munin",
+        "client.api": "pipewire-pulse",
+        "core.version": "1.6.8",
+        "module.id": 2,
+        "object.id": 104,
+        "object.serial": 1040,
+        "pipewire.access": "unrestricted",
+        "pipewire.protocol": "protocol-native"
+      }
+    }
+  },
+  {
+    "id": 140,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "info": {
+      "props": {
+        "client.id": 104,
+        "media.category": "Playback",
+        "media.class": "Stream/Output/Audio",
+        "media.name": "Playback",
+        "media.role": "Communication",
+        "media.type": "Audio",
+        "node.autoconnect": true,
+        "node.driver-id": 57,
+        "node.name": "Chromium",
+        "node.rate": "1/48000",
+        "node.want-driver": true,
+        "object.id": 140,
+        "object.register": false,
+        "object.serial": 1401,
+        "port.group": "stream.0",
+        "stream.is-live": true
+      }
+    }
+  }
+]
