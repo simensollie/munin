@@ -33,8 +33,44 @@ if [[ ${1:-} == plugin && ${2:-} == validate ]]; then
   [[ -f ${3:-}/manifest.json ]] || exit 1
   exit 0
 fi
+# Enabling a plugin that declares a bar-widget also PLACES it, the way the real
+# PluginRegistry does: --before puts it in front of the named widget, and with
+# no placement it lands after the section's default anchor (omarchy.tray). A
+# shim that made `enable` a no-op would let install.sh assert an ordering the
+# real shell never produces.
+if [[ ${1:-} == plugin && ${2:-} == enable ]]; then
+  # `omarchy plugin enable` talks to a running shell over a socket and fails
+  # when there is none -- an ssh or bare-TTY install. SHIM_NO_SHELL=1 is that.
+  [[ ${SHIM_NO_SHELL:-0} == 1 ]] && { echo "omarchy-shell: shell is not running" >&2; exit 1; }
+  [[ -f ${SHIM_SHELL_JSON:-} ]] || exit 0
+  pid="${3:-}"
+  if jq -e --arg id "$pid" '[.bar.layout[]?[]? | select(.id == $id)] | length > 0' \\
+    "$SHIM_SHELL_JSON" >/dev/null; then
+    exit 0
+  fi
+  tmp="$(mktemp)"
+  if [[ ${4:-} == --before ]]; then
+    jq --arg id "$pid" --arg anchor "${5:-}" '
+      .bar.layout.right |= (
+        (map(.id == $anchor) | index(true)) as $i
+        | if $i == null then . + [{id: $id}]
+          else .[0:$i] + [{id: $id}] + .[$i:] end
+      )' "$SHIM_SHELL_JSON" >"$tmp"
+  else
+    jq --arg id "$pid" --arg anchor "omarchy.tray" '
+      .bar.layout.right |= (
+        (map(.id == $anchor) | index(true)) as $i
+        | if $i == null then . + [{id: $id}]
+          else .[0:$i + 1] + [{id: $id}] + .[$i + 1:] end
+      )' "$SHIM_SHELL_JSON" >"$tmp"
+  fi
+  mv "$tmp" "$SHIM_SHELL_JSON"
+  exit 0
+fi
 if [[ ${1:-} == bar && ${2:-} == put ]]; then
   [[ -f ${SHIM_SHELL_JSON:-} ]] || exit 0
+  jq -e --arg id "${3:-}" '[.bar.layout[]?[]? | select(.id == $id)] | length > 0' \\
+    "$SHIM_SHELL_JSON" >/dev/null && exit 0
   tmp="$(mktemp)"
   jq --arg id "${3:-}" '.bar.layout.right = ([{id: $id}] + .bar.layout.right)' \\
     "$SHIM_SHELL_JSON" >"$tmp"

@@ -30,6 +30,12 @@ MARK_END = "-- <<< munin (managed by munin install.sh) <<<"
 KEYBIND_LINE = 'o.bind("SUPER + SHIFT + R", "Record meeting", "munin toggle")'
 
 
+def _keybind_backups(machine: FakeMachine) -> list[Path]:
+    """The keybinding backups, which live in munin's state dir, not the repo."""
+    state = machine.home / ".local" / "state" / "munin"
+    return sorted(state.glob("bindings.lua.*.bak")) if state.is_dir() else []
+
+
 def test_bash_syntax_is_clean() -> None:
     assert subprocess.run(["bash", "-n", str(INSTALL_SH)]).returncode == 0
 
@@ -56,8 +62,7 @@ def test_dry_run_changes_nothing(machine: FakeMachine) -> None:
     assert "would run:" in proc.stdout
     assert f"would run: python3 -m venv {machine.venv}" in proc.stdout
     assert "would run: cp -R" in proc.stdout
-    assert "would run: omarchy plugin enable local.munin" in proc.stdout
-    assert "would run: omarchy bar put local.munin --before omarchy.tray" in proc.stdout
+    assert "would run: omarchy plugin enable local.munin --before omarchy.tray" in proc.stdout
     assert f"would append to: {machine.bindings_link}" in proc.stdout
     assert "would run: systemctl --user daemon-reload" in proc.stdout
 
@@ -93,18 +98,22 @@ def test_install_performs_every_step(machine: FakeMachine) -> None:
     assert (machine.plugin_dir / "manifest.json").is_file()
     assert machine.called(f"omarchy plugin validate {machine.plugin_dir}")
 
-    # 4: enabled and placed on the bar
+    # 4: enabled and placed on the bar. The placement rides along with `enable`,
+    # which already places a bar-widget: a later `bar put` would be too late.
     assert machine.called("omarchy-shell shell rescanPlugins")
-    assert machine.called("omarchy plugin enable local.munin")
-    assert machine.called("omarchy bar put local.munin --before omarchy.tray")
+    assert machine.called("omarchy plugin enable local.munin --before omarchy.tray")
     layout = json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["layout"]
     right = [w["id"] for w in layout["right"]]
     assert right.index("local.munin") < right.index("omarchy.tray")
 
-    # 5: keybind, backed up, appended through the symlink, and said out loud
-    backup = Path(str(machine.bindings_target) + ".munin-bak")
-    assert backup.is_file()
-    assert MARK_BEGIN not in backup.read_text(encoding="utf-8")
+    # 5: keybind, backed up outside the dotfiles repo, appended through the
+    # symlink, and said out loud
+    backups = _keybind_backups(machine)
+    assert len(backups) == 1
+    assert MARK_BEGIN not in backups[0].read_text(encoding="utf-8")
+    assert not Path(str(machine.bindings_target) + ".munin-bak").exists(), (
+        "the backup must not land in the dotfiles repository"
+    )
     text = machine.bindings_target.read_text(encoding="utf-8")
     assert text.count(MARK_BEGIN) == 1
     assert KEYBIND_LINE in text
@@ -154,7 +163,7 @@ def test_install_is_idempotent(machine: FakeMachine) -> None:
     machine.run()
     config = machine.data_home / "config.toml"
     config.write_text("# hand edited, do not clobber\n", encoding="utf-8")
-    backup_before = Path(str(machine.bindings_target) + ".munin-bak").read_text(encoding="utf-8")
+    backup_before = [(b.name, b.read_text(encoding="utf-8")) for b in _keybind_backups(machine)]
     machine.clear_log()
 
     second = machine.run()
@@ -163,11 +172,15 @@ def test_install_is_idempotent(machine: FakeMachine) -> None:
     assert text.count(MARK_BEGIN) == 1
     assert text.count(KEYBIND_LINE) == 1
     assert "already present" in second.stdout
-    assert Path(str(machine.bindings_target) + ".munin-bak").read_text(encoding="utf-8") == backup_before
+    assert [
+        (b.name, b.read_text(encoding="utf-8")) for b in _keybind_backups(machine)
+    ] == backup_before
     assert config.read_text(encoding="utf-8") == "# hand edited, do not clobber\n"
     assert not machine.called("munin setup")
-    # Already on the bar: placed once, not twice.
-    assert not machine.called("omarchy bar put")
+    # Already on the bar: left where it is, and never asked for a second place.
+    assert machine.called("omarchy plugin enable local.munin")
+    assert not machine.called("omarchy plugin enable local.munin --before")
+    assert "left where it is" in second.stdout
     layout = json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["layout"]
     assert [w["id"] for w in layout["right"]].count("local.munin") == 1
 
@@ -260,3 +273,39 @@ def test_missing_tool_stops_at_step_one(machine: FakeMachine, tmp_path: Path) ->
     assert "ffmpeg" in proc.stdout
     assert "step 1 failed" in proc.stderr
     assert not machine.venv.exists()
+
+
+def test_an_unreachable_shell_does_not_strand_the_install(machine: FakeMachine) -> None:
+    """ssh, a bare TTY, or a first boot before the shell is up (step 4).
+
+    The plugin cannot be enabled without a running shell, and that is a reason
+    to say so, not a reason to leave the machine with a venv and no data root.
+    """
+    machine.env["SHIM_NO_SHELL"] = "1"
+
+    proc = machine.run()
+
+    assert "not reachable" in proc.stderr
+    assert "omarchy plugin enable local.munin --before omarchy.tray" in proc.stdout
+
+    # Steps 5-7 still ran: they are filesystem work, not shell work.
+    assert MARK_BEGIN in machine.bindings_target.read_text(encoding="utf-8")
+    assert machine.unit.is_file()
+    assert (machine.data_home / "recordings").is_dir()
+    assert (machine.data_home / "config.toml").is_file()
+
+
+def test_uninstall_removes_the_keybind_backup_and_reloads(machine: FakeMachine) -> None:
+    machine.run()
+    assert len(_keybind_backups(machine)) == 1
+    # A backup an earlier version of the installer left inside the dotfiles repo.
+    legacy = Path(str(machine.bindings_target) + ".munin-bak")
+    legacy.write_text("old\n", encoding="utf-8")
+    machine.clear_log()
+
+    machine.run("--uninstall")
+
+    assert _keybind_backups(machine) == []
+    assert not legacy.exists(), "an uninstall must not leave litter in someone's repo"
+    # The key still points at a binary this same run deletes, until Hyprland is told.
+    assert machine.called("hyprctl reload")

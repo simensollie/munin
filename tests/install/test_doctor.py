@@ -41,10 +41,16 @@ def _run(machine: FakeMachine) -> dict[str, CheckResult]:
 
 
 @pytest.fixture()
-def installed(machine: FakeMachine) -> FakeMachine:
+def installed(machine: FakeMachine, monkeypatch: pytest.MonkeyPatch) -> FakeMachine:
     machine.run()
     (machine.home / "pensieve" / "raw").mkdir(parents=True)
     machine.env["HOME"] = str(machine.home)
+    # The detector spawns pw-dump itself, so it reads the *process* environment
+    # rather than the env dict handed to run_checks. Point it at the shim, or a
+    # healthy machine reports a detector that could not reach PipeWire -- which
+    # is now, correctly, a failing row.
+    for key in ("PATH", "SHIM_LOG", "SHIM_PW_DUMP", "XDG_RUNTIME_DIR"):
+        monkeypatch.setenv(key, machine.env[key])
     return machine
 
 
@@ -69,9 +75,9 @@ def test_each_check_reports_what_it_found(installed: FakeMachine) -> None:
     assert "Synthetic Mono Microphone" in checks["default source"].detail
     assert "16000" in checks["default source"].detail
 
-    # The detector is driven directly, whatever detection.source says. It is a
-    # stub in this tree, so a warning is the honest answer -- never a crash.
-    assert checks["detection"].status in ("ok", "warn")
+    # The detector is driven directly, whatever detection.source says.
+    assert checks["detection"].status == "ok"
+    assert "no call in progress" in checks["detection"].detail
 
     assert checks["omarchy cli"].status == "ok"
     assert checks["plugin installed"].status == "ok"
@@ -202,3 +208,24 @@ def test_json_output_is_machine_readable(
     assert {"python", "keybind", "plugin on bar", "transcription", "platform linux"} <= names
     for check in payload["checks"]:
         assert check["status"] in ("ok", "warn", "fail", "skip")
+
+
+def test_a_detector_that_cannot_reach_pipewire_is_a_failure(
+    installed: FakeMachine, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """An empty scan and a dead probe are the same empty list; the row must differ.
+
+    D4 rests entirely on detection, so a check that certifies a detector it
+    could not even reach is worse than no check at all.
+    """
+    import munin.detect.linux as linux
+
+    def unreachable(self: object, argv: object, timeout: object, which: object) -> None:
+        self._record(which, "pw-dump exited 255: can't connect: Host is down")  # type: ignore[attr-defined]
+        return None
+
+    monkeypatch.setattr(linux.PipewireDetector, "_run_json", unreachable, raising=True)
+
+    checks = _run(installed)
+    assert checks["detection"].status == "fail"
+    assert "could not read PipeWire" in checks["detection"].detail

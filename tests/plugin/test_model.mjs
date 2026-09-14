@@ -150,7 +150,9 @@ test("the seven states of spec 9.2 each render one way", () => {
   assert.equal(M.barPulses("ending"), false);
 
   assert.equal(M.barSpins("transcribing"), true);
-  assert.equal(M.barSpins("captured"), true);
+  // `captured` with no worker behind it is the PoC's designed end state and it
+  // lasts forever: a spinner there is an animation that never stops.
+  assert.equal(M.barSpins("captured"), false);
   assert.equal(M.barSpins("done"), false);
 
   assert.equal(M.barTone("recording"), "urgent");
@@ -166,7 +168,10 @@ test("the identity glyph is U+F0EC2, the ScreenRecording.qml precedent", () => {
 });
 
 test("barLabel says the right thing in each state", () => {
-  const rec = M.parseState(stateJson());
+  // The heartbeat keeps pace with the clock, or the view would read as stale.
+  const rec = M.parseState(
+    stateJson({ updated_at: "2026-09-14T14:07:00+02:00" }),
+  );
   assert.equal(M.barLabel(rec, T0 + (42 * 60 + 11) * 1000), "00:42:11");
 
   const det = M.parseState(stateJson({ state: "detected", started_at: null }));
@@ -350,7 +355,7 @@ test("callEventArgv omits a pid PipeWire did not publish", () => {
     "call-started",
     "--pid",
     "37022",
-    "--app",
+    "--app-id",
     "teams-tab",
     "--title",
     "Call | Microsoft Teams",
@@ -362,6 +367,112 @@ test("callEventArgv omits a pid PipeWire did not publish", () => {
   // call-ended carries no title: the daemon already knows the session.
   const ended = M.callEventArgv("call-ended", { pid: 37022 }, null, "Call | Microsoft Teams");
   assert.deepEqual(ended, ["munin", "event", "call-ended", "--pid", "37022"]);
+});
+
+test("callEventArgv carries the label, the rule id and the playback handle", () => {
+  // The handle is what binds the app track. Without it the daemon has no app
+  // target and the capturer writes a silent app.opus beside the microphone.
+  const argv = M.callEventArgv(
+    "call-started",
+    { key: "pid:37022", pid: 37022, playback_handle: "91" },
+    { app_id: "teams-tab", label: "Microsoft Teams" },
+    "Call | Microsoft Teams",
+  );
+  assert.deepEqual(argv, [
+    "munin",
+    "event",
+    "call-started",
+    "--pid",
+    "37022",
+    "--app",
+    "Microsoft Teams",
+    "--app-id",
+    "teams-tab",
+    "--handle",
+    "91",
+    "--title",
+    "Call | Microsoft Teams",
+  ]);
+
+  // call-ended needs neither: the daemon already knows which session it is.
+  const ended = M.callEventArgv(
+    "call-ended",
+    { pid: 37022, playback_handle: "91" },
+    null,
+    "",
+  );
+  assert.deepEqual(ended, ["munin", "event", "call-ended", "--pid", "37022"]);
+});
+
+test("identify matches case-insensitively and on the binary, as the daemon does", () => {
+  // PipeWire's application.name is whatever the app set; the daemon casefolds.
+  assert.equal(M.identify("teams", "", "", null).app_id, "teams-native");
+  assert.equal(
+    M.identify("Chromium", "CHROME-teams.microsoft.com__-Default", "", null).app_id,
+    "teams-pwa",
+  );
+
+  // A rule with only a binary -- the shape `detect/base.identify` supports and
+  // the plugin used to ignore entirely, so a new row simply did nothing.
+  const rules = [{ app_id: "beacon", label: "Beacon 365", binary: "beacon" }];
+  assert.deepEqual(M.identify("", "", "", rules, "Beacon"), {
+    app_id: "beacon",
+    label: "Beacon 365",
+    matched_by: "pipewire",
+  });
+  assert.equal(M.identify("", "", "", rules, "chrome"), null);
+});
+
+test("the daemon's [[detection.apps]] table beats the compiled-in fallback", () => {
+  const v = M.parseState(
+    stateJson({
+      detection_rules: [
+        { app_id: "beacon-native", label: "Beacon 365", client_name: "Beacon" },
+        { app_id: "bad", label: "" },
+        "nonsense",
+      ],
+    }),
+  );
+  assert.deepEqual(M.rulesFor(v), [
+    { app_id: "beacon-native", label: "Beacon 365", client_name: "Beacon" },
+  ]);
+  assert.equal(M.identify("Beacon", "", "", M.rulesFor(v)).app_id, "beacon-native");
+
+  // A daemon that published nothing leaves the plugin on its own table.
+  assert.equal(M.rulesFor(M.parseState(stateJson())), M.DEFAULT_APP_RULES);
+  assert.equal(M.rulesFor(null), M.DEFAULT_APP_RULES);
+});
+
+// ------------------------------------------------------------- staleness
+
+test("a state file the daemon stopped refreshing is not a live recording", () => {
+  const fresh = M.parseState(stateJson());
+  assert.equal(M.isStale(fresh, T0 + 60_000), false);
+  assert.equal(M.effectiveState(fresh, T0 + 60_000), "recording");
+
+  // Three missed 30 s heartbeats: munin-rec was killed, and a pulsing dot with
+  // a climbing clock would claim a recording that died with it.
+  const stale = M.parseState(stateJson());
+  assert.equal(M.isStale(stale, T0 + 91_000), true);
+  assert.equal(M.effectiveState(stale, T0 + 91_000), "failed");
+  assert.match(M.tooltipText(stale, T0 + 91_000), /stopped answering/);
+
+  // A settled state stays true whatever the heartbeat says.
+  const captured = M.parseState(stateJson({ state: "captured" }));
+  assert.equal(M.effectiveState(captured, T0 + 3_600_000), "captured");
+
+  // No file at all is absent, not stale.
+  assert.equal(M.isStale(M.parseState("{"), T0), false);
+});
+
+test("the grace period offers Keep recording, which nothing else can", () => {
+  assert.deepEqual(M.secondaryAction("ending"), {
+    label: "Keep recording",
+    argv: ["munin", "event", "call-started"],
+  });
+  for (const s of ["idle", "detected", "recording", "captured", "done", "failed"]) {
+    assert.equal(M.secondaryAction(s), null, s);
+  }
 });
 
 // --------------------------------------------------------- shape contract
@@ -393,6 +504,10 @@ test("Model.js exports every function the QML calls", () => {
     "liveCalls",
     "diffCalls",
     "callEventArgv",
+    "isStale",
+    "rulesFor",
+    "parseRules",
+    "secondaryAction",
   ]) {
     assert.equal(typeof M[name], "function", name);
   }

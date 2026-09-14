@@ -20,6 +20,16 @@ ExecStart=%h/.local/bin/munin-rec
 Restart=on-failure
 RestartSec=5
 Environment=XDG_RUNTIME_DIR=%t
+# The default (KillMode=control-group) SIGTERMs pw-record and ffmpeg at the same
+# instant as munin-rec, on every `systemctl --user stop` and every logout --
+# which is exactly the "logging out mid-meeting" case. capture/linux.py stops the
+# recorder first on purpose so ffmpeg sees a clean EOF and writes the Ogg
+# trailer; signalling ffmpeg first risks a container with no trailer. KillMode
+# mixed sends SIGTERM to munin-rec alone and lets it run that ordering itself.
+KillMode=mixed
+# Comfortably above the capturer's worst case (~32 s for two tracks), after
+# which systemd SIGKILLs whatever is left in the cgroup.
+TimeoutStopSec=60
 
 [Install]
 WantedBy=graphical-session.target

@@ -43,18 +43,34 @@ window title is never re-tokenized by a shell:
 
 | When | Command |
 |---|---|
-| A process starts holding a playback and a capture stream | `munin event call-started [--pid N] [--app ID] [--title T]` |
+| A process starts holding a playback **and** a capture stream, *and* the rule table identifies it | `munin event call-started [--pid N] [--app LABEL] [--app-id ID] [--handle SERIAL] [--title T]` |
 | That process stops holding both | `munin event call-ended [--pid N]` |
 | Panel primary button, bar middle-click | `munin start [--from-detection\|--resume]` / `munin stop` |
 | Bar right-click | `munin toggle` |
 | Panel opens | `munin list --json --limit 5` |
 | Panel folder rows | `xdg-open` on `$MUNIN_HOME` or a session directory |
 
-Detection events are only sent while a daemon is actually running (`state.json`
-present and `daemon_pid` set), so a stopped daemon never costs a process spawn
-per PipeWire event. The plugin does not read `config.toml`: when
-`detection.source` is not `"plugin"` the **daemon** ignores these events, which
-is what the `accepted` field of the `event` reply is for.
+`--handle` is the `object.serial` of the owner's playback node, and it is what
+binds the app track: without it the daemon has no app target and the capturer
+writes a silent `app.opus` beside the microphone. Both conditions of spec §6.3
+have to hold before an event is sent — an owner holding both stream kinds that
+no rule identifies is a Discord call or a WebRTC page, not a meeting, and
+prompting for it would ask to record people Munin was never asked to care about.
+Only *audio* streams count: a screencast or a webcam is a stream node too.
+
+Detection events are only sent while a daemon is actually running — `state.json`
+present, `daemon_pid` set, **and** `updated_at` inside three 30 s heartbeats. The
+file outlives a killed daemon, pid and all, so the heartbeat is the only liveness
+signal there is; a stale one also stops the bar rendering a recording that ended
+when the process did.
+
+The plugin does not read `config.toml` — it has no TOML parser — so the daemon
+publishes the resolved `[[detection.apps]]` table as `detection_rules` in
+`state.json`, and `Model.rulesFor` prefers it over the table compiled into
+`Model.js`. That is what keeps D13 true here: another meeting application is a
+row in the config, never a code change. When `detection.source` is not
+`"plugin"` the **daemon** ignores these events, which is what the `accepted`
+field of the `event` reply is for.
 
 ## The seven bar states (spec §9.2)
 
@@ -64,7 +80,8 @@ is what the `accepted` field of the `event` reply is for.
 | `detected` | dim microphone glyph and the app label |
 | `recording` | pulsing red dot and `HH:MM:SS` |
 | `ending` | the same red dot held steady, still counting |
-| `captured` / `transcribing` | a turning glyph and the queue depth |
+| `captured` | a static glyph and the queue depth — the audio is safe and nothing is running |
+| `transcribing` | a turning glyph and the queue depth |
 | `done` | a tick and "Transcript ready", for 30 s |
 | `failed` | an exclamation and "Retry", until it is acknowledged |
 
@@ -87,11 +104,22 @@ row rather than code (D13):
 1. **A call is live.** One owner holds a PipeWire playback stream *and* a
    capture stream. Playback is `isStream && isSink`; capture is
    `isStream && !isSink` — the flags `panels/audio` relies on, because
-   Quickshell versions differ in how `PwNode.type` is exposed.
-2. **It is Teams.** `Model.identify` runs the three-shape table in match order:
-   the PipeWire client name, then the Hyprland window class, then the window
-   title (case-insensitive). Same table and same order as
-   `detect/base.identify`, so the plugin and the daemon-side detector agree.
+   Quickshell versions differ in how `PwNode.type` is exposed. A node with no
+   `audio` interface is skipped first: a screencast or a webcam publishes
+   `isStream` and not `isSink` too, and counting one as a capture stream would
+   let "a browser playing a video while sharing its screen" look like a call —
+   exactly the false positive condition 1 exists to remove.
+2. **It is Teams.** `Model.identify` runs the four-shape table in match order:
+   the PipeWire client name, then the process binary, then the Hyprland window
+   class, then the window title. Every comparison is case-folded. Same shapes,
+   same order and the same casefolding as `detect/base.identify`, so the plugin
+   and the daemon-side detector agree — and the table itself comes from the
+   daemon (`detection_rules` in `state.json`), so it is the user's config that
+   is being matched, not a copy compiled in here.
+
+Both conditions must hold before anything is reported. Condition 1 alone is a
+Discord call, a Signal call or any WebRTC page, and raising the D4 prompt for one
+would offer to record a conversation nobody asked Munin about.
 
 Owners are grouped by `application.process.id` from the node's properties, and
 by `client.id` when PipeWire published no pid on the node (some clients publish
@@ -152,6 +180,15 @@ this is house-consistent rather than clean.
 After editing, the live shell picks the plugin up with
 `omarchy-shell shell rescanPlugins`; QML errors land in
 `journalctl --user -t omarchy-shell -f`.
+
+## The panel's actions
+
+The notification wrapper takes exactly one `--exec`, so every secondary action
+lives here (contracts §8). During the grace period the panel therefore carries a
+**Keep recording** button, and the `k` key, which runs `munin event
+call-started` — that cancels the countdown; `start --resume` is not it, because
+the session is still recording. The *Stops at* row next to it says when the
+recording ends by itself if nobody does.
 
 ## What is deferred
 

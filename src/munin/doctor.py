@@ -324,6 +324,22 @@ def check_detection(env: DoctorEnv) -> CheckResult:
         return CheckResult("detection", "warn", f"detector not available: {reason}")
     except Exception as exc:  # noqa: BLE001 - a doctor never crashes
         return CheckResult("detection", "warn", f"detector raised {type(exc).__name__}: {exc}")
+
+    # "Nothing is happening" and "I could not look" are the same empty list.
+    # scan() swallows a pw-dump failure by design -- a broken probe must not
+    # take the daemon's poll loop down -- and records it for describe() to
+    # report. Detection is the whole basis of D4, so a check that certifies a
+    # dead detector as healthy is worse than no check.
+    probe_error = ""
+    try:
+        probe_error = str(detector.describe().get("pw_error") or "")
+    except Exception:  # noqa: BLE001 - a describe() that fails is not the diagnosis
+        probe_error = ""
+    if probe_error:
+        return CheckResult(
+            "detection", "fail", f"the detector could not read PipeWire: {probe_error}"
+        )
+
     if not calls:
         return CheckResult(
             "detection",

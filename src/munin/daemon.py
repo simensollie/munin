@@ -31,7 +31,7 @@ import signal
 import subprocess
 import sys
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -49,6 +49,7 @@ from munin.config import Config
 from munin.desktop import IdleInhibitor, get_idle_inhibitor
 from munin.ipc import AlreadyRunning, IpcError, Server, socket_path
 from munin.notify import Notification
+from munin.spool import StateError
 
 __all__ = ["Daemon", "RuntimeState", "main"]
 
@@ -61,6 +62,11 @@ POLL_INTERVAL = 1.0
 #: can tell a live daemon from a stale file. Elapsed time is still computed by
 #: the plugin from ``started_at``; no timer writes a *changing* field here.
 HEARTBEAT_SECONDS = 30.0
+
+#: How often a live capture's tracks are checked for a process that has died.
+#: Cheap by construction -- :meth:`Capturer.failed_tracks` spawns nothing -- but
+#: there is no point asking more often than a track can plausibly fail.
+HEALTH_POLL_SECONDS = 5.0
 
 #: The runtime states ``state.json`` may carry (contracts section 7.2).
 RUNTIME_STATES: tuple[str, ...] = (
@@ -141,6 +147,12 @@ class RuntimeState:
     last_error: str | None = None
     idle_was_inhibited: bool = False
     daemon_pid: int = 0
+    #: The resolved ``[[detection.apps]]`` table, so the shell plugin matches on
+    #: the user's rules instead of a copy compiled into its own source. D13 says
+    #: another meeting application is a row in ``config.toml``, never code, and
+    #: the plugin is the default detection source -- it cannot read the config
+    #: itself, so the daemon, which owns it, publishes it here.
+    detection_rules: list[dict] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -157,6 +169,7 @@ class RuntimeState:
             "queue_depth": self.queue_depth,
             "last_error": self.last_error,
             "idle_was_inhibited": self.idle_was_inhibited,
+            "detection_rules": list(self.detection_rules),
             "updated_at": _iso(_now()),
             "daemon_pid": self.daemon_pid,
         }
@@ -271,7 +284,9 @@ class Daemon:
         state_path_override: Path | None = None,
     ) -> None:
         self.config = config
-        self.state = RuntimeState(daemon_pid=os.getpid())
+        self.state = RuntimeState(
+            daemon_pid=os.getpid(), detection_rules=_rule_rows(config)
+        )
         self.clock = clock or _now
         self.spool = spool if spool is not None else _default_spool(config)
         self.capturer_factory = capturer_factory or _default_capturer_factory(config)
@@ -292,8 +307,14 @@ class Daemon:
         self._ending_since: datetime | None = None
         self._warned = False
         self._last_poll: datetime | None = None
+        self._last_health_poll: datetime | None = None
+        self._health_warned: set[str] = set()
         self._last_state_write: datetime | None = None
         self._stopping = False
+        #: Did *this* process take the stay-awake hold? Only what we took may be
+        #: released -- ``state.idle_was_inhibited`` records the prior state, and
+        #: a daemon that never recorded has no business calling ``allow-idle``.
+        self._idle_held = False
 
     # --- collaborators ---------------------------------------------------
     def _default_notifier(self, notification: Notification) -> bool:
@@ -364,9 +385,22 @@ class Daemon:
             if session is None:
                 log.info("resume window has closed; starting a fresh session")
         if session is not None:
-            resumed = True
-            self._reopen(session)
-        else:
+            try:
+                self._reopen(session)
+                resumed = True
+            except StateError as exc:
+                # The worker claimed the session between ``resumable()`` and
+                # here (D15: ownership is by state, and the loser of the race
+                # re-reads rather than overwrites). The resume window has
+                # effectively closed, so open a fresh session -- which is what
+                # a closed window does anyway, and what the CLI already reports.
+                log.info(
+                    "could not resume session=%s (%s); starting a fresh one",
+                    getattr(session, "id", None),
+                    exc,
+                )
+                session = None
+        if session is None:
             session = self._create(title=title, from_detection=from_detection, now=now)
 
         self.session = session
@@ -388,6 +422,8 @@ class Daemon:
             raise IpcError("capture_failed", str(exc)) from exc
 
         self.capturer = capturer
+        self._last_health_poll = None
+        self._health_warned = set()
         session.capture_method = getattr(capturer, "method", None)
         if getattr(session, "started_at", None) is None:
             session.started_at = getattr(segment, "started_at", None) or now
@@ -410,6 +446,7 @@ class Daemon:
         self._ending_since = None
         self._warned = False
         self._write_state()
+        self._warn_if_capture_widened(capturer, app)
         log.info(
             "recording started session=%s segment=%d resumed=%s source=%s",
             self.state.session_id,
@@ -526,16 +563,40 @@ class Daemon:
         """The app's streams disappeared. Starts the grace period if recording."""
         if self.is_recording and self.state.state == "recording":
             session_pid = (self.state.detected_app or {}).get("pid")
-            if pid is not None and session_pid is not None and pid != session_pid:
+            if session_pid is None:
+                # Nothing the detector identified is behind this recording -- an
+                # ad-hoc ``munin start`` in a room with no call. "The call ended"
+                # is then not a statement about this session, and acting on it
+                # would auto-stop every ad-hoc recording one grace period in.
+                return False
+            if pid is not None and pid != session_pid:
                 return False
             self._begin_grace()
             return True
-        if self.state.state == "detected":
-            self._detected = None
-            self.state.detected_app = None
-            self._refresh_idle_state()
+        if self.is_recording:
+            # Already in the grace period: the timer owns the ending from here.
+            return False
+        if self._detected is not None or self._playback_handle is not None:
+            watched = (self.state.detected_app or {}).get("pid")
+            if pid is not None and watched is not None and pid != watched:
+                return False
+            was_detected = self.state.state == "detected"
+            # Forget the call, handle included. A playback handle kept past the
+            # call's life would be handed to the next recording, where the node
+            # is gone and pw-record answers a dead --target with the whole
+            # desktop mix (capture/linux.py, and contracts section 3's
+            # ``app_source``) -- audio from people who were never in a meeting.
+            self._forget_detected()
+            if was_detected:
+                self._refresh_idle_state()
             return True
         return False
+
+    def _forget_detected(self) -> None:
+        """Drop every trace of the call the daemon was watching."""
+        self._detected = None
+        self._playback_handle = None
+        self.state.detected_app = None
 
     def _begin_grace(self) -> None:
         now = self.clock()
@@ -592,8 +653,76 @@ class Daemon:
                     log.error("auto-stop failed code=%s message=%s", exc.code, exc)
                 return
 
+        self._poll_capture_health(current)
         self._poll_detection(current)
         self._heartbeat(current)
+
+    def _poll_capture_health(self, now: datetime) -> None:
+        """Notice a track whose processes have died, while the meeting runs.
+
+        ffmpeg's Ogg-Opus muxer writes nothing to disk until it closes the file,
+        so an encoder killed five minutes into an hour leaves a zero-byte file
+        and no other symptom. Without this the user finds out at ``stop``, an
+        hour later, with nothing to keep.
+
+        A dead microphone ends the session there and then and notifies (D14: a
+        recording that stops silently is indistinguishable from a crash). A dead
+        app track is surfaced but not fatal -- the mic side is still a record of
+        the meeting, and throwing it away to punish the other track helps nobody.
+        """
+        if not self.is_recording or self.capturer is None:
+            return
+        if self._last_health_poll is not None:
+            if (now - self._last_health_poll).total_seconds() < HEALTH_POLL_SECONDS:
+                return
+        self._last_health_poll = now
+        probe = getattr(self.capturer, "failed_tracks", None)
+        if probe is None:  # a capturer that cannot answer is not a failing one
+            return
+        try:
+            failed = list(probe())
+        except Exception as exc:  # noqa: BLE001 - a broken probe is not a dead track
+            log.warning("could not read capture health error=%s", exc)
+            return
+        dead = {str(getattr(track, "kind", "")): track for track in failed}
+        if not dead:
+            return
+
+        if "mic" in dead:
+            detail = str(getattr(dead["mic"], "detail", "the recorder went away"))
+            log.error(
+                "microphone capture died mid-recording session=%s detail=%s",
+                self.state.session_id,
+                detail,
+            )
+            try:
+                self._finish(auto=True, reason=f"microphone capture died: {detail}")
+            except IpcError as exc:
+                # Same reasoning as the grace-period auto-stop: nobody is
+                # holding a socket for this, so it is logged, not raised.
+                log.error(
+                    "could not finish after a dead microphone code=%s message=%s",
+                    exc.code,
+                    exc,
+                )
+            return
+
+        for kind, track in dead.items():
+            if kind in self._health_warned:
+                continue
+            self._health_warned.add(kind)
+            detail = str(getattr(track, "detail", "the recorder went away"))
+            log.error(
+                "the %s track died mid-recording session=%s detail=%s",
+                kind,
+                self.state.session_id,
+                detail,
+            )
+            self.state.last_error = f"the {kind} track died: {detail}"
+            self._write_state()
+            self.notifier(
+                notify.track_failed(kind, detail, session_id=self.state.session_id)
+            )
 
     def _poll_detection(self, now: datetime) -> None:
         detection = self.config.detection
@@ -619,8 +748,12 @@ class Daemon:
                 handle=call.evidence.playback_handle,
             )
         else:
+            # Only a call the detector actually identified can be ended by the
+            # detector. Without this gate an ad-hoc recording -- which has no
+            # ``detected_app`` -- enters the grace period on the first poll and
+            # auto-stops ``grace_seconds`` later, silently truncating it.
             watched = (self.state.detected_app or {}).get("pid")
-            if watched is not None or self.is_recording:
+            if watched is not None:
                 self.on_call_ended(pid=watched)
 
     def _heartbeat(self, now: datetime) -> None:
@@ -646,6 +779,12 @@ class Daemon:
         it and restores that prior state on stop, so a user who keeps the machine
         awake permanently does not lose it when a recording ends. Which command
         does the holding is the platform's business (:mod:`munin.desktop`).
+
+        Release only what this process took. ``idle_was_inhibited`` answers "was
+        it held before?", which is not the same question as "did we hold it?": a
+        daemon that never recorded has both answers False, and releasing on that
+        would switch off a stay-awake the *user* set by hand at every
+        ``systemctl --user restart`` and every logout.
         """
         if not self.config.idle.inhibit:
             return
@@ -655,11 +794,13 @@ class Daemon:
                 log.info("idle was already inhibited; leaving it alone")
                 return
             self.idle_inhibitor.inhibit()
+            self._idle_held = True
         else:
             if self.state.idle_was_inhibited:
                 log.info("idle was inhibited before this recording; leaving it held")
-            else:
+            elif self._idle_held:
                 self.idle_inhibitor.release()
+            self._idle_held = False
             self.state.idle_was_inhibited = False
 
     def run(self) -> int:
@@ -679,6 +820,7 @@ class Daemon:
             print(message, file=sys.stderr)
             return 3
         self._install_signals()
+        self._recover()
         self._refresh_idle_state()
         log.info("munin-rec ready pid=%d socket=%s", os.getpid(), self.socket_path)
         try:
@@ -692,6 +834,31 @@ class Daemon:
             server.close()
         log.info("munin-rec stopped")
         return 0
+
+    def _recover(self) -> None:
+        """Spec 11: adopt whatever the last munin-rec left open.
+
+        A SIGKILL, an OOM kill or a power cut skips :meth:`shutdown` entirely
+        and leaves a session at ``recording`` or ``ending``. Nothing downstream
+        rescues it -- the worker only ever looks at ``captured`` and ``pending``
+        -- so without this the audio is stranded on disk forever and the bar
+        shows a live recording with no capturer behind it. ``munin-work`` does
+        the same thing with ``transcribing`` before it drains.
+
+        Guarded: one unreadable session must not stop the daemon from binding.
+        """
+        try:
+            recovered = self.spool.recover_for_daemon()
+        except Exception as exc:  # noqa: BLE001 - a broken session is not fatal
+            log.warning("crash recovery failed error=%s", exc)
+            return
+        for session in recovered or []:
+            log.info(
+                "recovered an interrupted session=%s state=%s",
+                getattr(session, "id", None),
+                getattr(session, "state", None),
+            )
+        self._refresh_queue_depth()
 
     def shutdown(self) -> None:
         """Stop capture cleanly and leave a conformant session behind.
@@ -729,8 +896,12 @@ class Daemon:
             label="microphone",
         )
         app: CaptureTarget | None = None
-        if self._playback_handle:
-            detected = self._detected or {}
+        # Both halves matter: the handle names a node, and ``_detected`` is the
+        # daemon's belief that the call behind it is still live. A handle
+        # without that belief is debris from a finished call, and binding it
+        # would either miss the meeting or widen capture to the desktop mix.
+        if self._playback_handle and self._detected is not None:
+            detected = self._detected
             app = CaptureTarget(
                 kind="app",
                 handle=self._playback_handle,
@@ -852,9 +1023,7 @@ class Daemon:
         self.session = None
         if auto:
             # The streams are gone; a stale "detected" app would make the bar lie.
-            self._detected = None
-            self._playback_handle = None
-            self.state.detected_app = None
+            self._forget_detected()
         self._refresh_queue_depth()
         self._write_state()
 
@@ -876,6 +1045,32 @@ class Daemon:
                 )
             )
         return payload
+
+    def _warn_if_capture_widened(self, capturer: Capturer, app: CaptureTarget | None) -> None:
+        """Say so, now, when the app track is not the application's own stream.
+
+        An application was asked for and something else is being recorded -- in
+        practice the desktop-sink monitor, which is every other application's
+        audio as well. ``segments[].app_source`` puts it on the record, but only
+        afterwards; the subjects of that audio saw no prompt, so the user has to
+        be able to stop while it is still happening (spec 12).
+        """
+        if app is None:
+            return
+        source = _describe_app_source(capturer)
+        if source is None or source == "stream":
+            return
+        log.warning(
+            "the app track is %s, not %s's own stream session=%s",
+            source,
+            app.label,
+            self.state.session_id,
+        )
+        self.state.last_error = f"the meeting track is {source}, not an isolated stream"
+        self._write_state()
+        self.notifier(
+            notify.capture_widened(app.label, session_id=self.state.session_id)
+        )
 
     def _has_audio(self, session: Any) -> bool:
         directory = Path(getattr(session, "directory", ""))
@@ -948,7 +1143,7 @@ class Daemon:
     def _refresh_idle_state(self) -> None:
         """On start, mirror the newest session so the bar is right after a restart."""
         self._refresh_queue_depth()
-        if self.state.state in ("recording", "ending"):
+        if self.state.state in ("recording", "ending") and self.session is not None:
             self._write_state()
             return
         try:
@@ -963,6 +1158,13 @@ class Daemon:
             mapped = {"pending": "captured"}.get(
                 getattr(latest, "state", ""), getattr(latest, "state", "idle")
             )
+            if mapped in ("recording", "ending"):
+                # No capturer is running in this process, so this is the debris
+                # of a crash that recovery could not reach, never a live
+                # recording. Publishing it verbatim would put a pulsing red dot
+                # on the bar that no `munin stop` can turn off (D10: the bar is
+                # the only reliable stop control).
+                mapped = "captured" if self._has_audio(latest) else "failed"
             self.state.state = mapped if mapped in RUNTIME_STATES else "idle"
             self.state.session = str(getattr(latest, "directory", ""))
             self.state.session_id = getattr(latest, "id", None)
@@ -1007,6 +1209,22 @@ def _describe_app_source(capturer: Capturer | None) -> str | None:
         return None
     value = described.get("app_source")
     return str(value) if value else None
+
+
+def _rule_rows(config: Config) -> list[dict]:
+    """``[[detection.apps]]`` flattened for ``state.json``, empty fields dropped."""
+    rows: list[dict] = []
+    for rule in getattr(config, "app_rules", ()) or ():
+        row: dict[str, str] = {
+            "app_id": str(getattr(rule, "app_id", "")),
+            "label": str(getattr(rule, "label", "")),
+        }
+        for name in ("client_name", "binary", "window_class", "window_title_contains"):
+            value = getattr(rule, name, None)
+            if value:
+                row[name] = str(value)
+        rows.append(row)
+    return rows
 
 
 def _run_quiet(argv: Sequence[str]) -> int:

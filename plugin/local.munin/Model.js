@@ -44,11 +44,22 @@ var GLYPH_FOLDER = "󰉋";       // folder, for the "open recordings" row
 // goes back to hiding itself (spec 9.2).
 var DONE_VISIBLE_SECONDS = 30;
 
+// The daemon rewrites state.json every 30 s while it lives, for exactly one
+// reason: so a reader can tell it apart from a file left behind by a daemon
+// that was killed. Three missed heartbeats is the threshold. Without this a
+// SIGKILL'd munin-rec leaves `state: "recording"` on disk and the bar shows a
+// pulsing red dot and a climbing clock forever, for a meeting that stopped
+// being recorded the instant the process died -- the worst thing a recording
+// indicator can do (D10).
+var STALE_AFTER_SECONDS = 90;
+
 // The three shapes of spec section 6.3, in match order. Mirrors the
 // [[detection.apps]] rows of contracts section 9, so the plugin behaves the
-// same way `detect/linux.py` does. The daemon's config is authoritative;
-// these are the fallback the plugin ships with, because the plugin does not
-// read config.toml.
+// same way `detect/linux.py` does. The daemon's config is authoritative and
+// reaches the plugin as `detection_rules` in state.json; these are only the
+// fallback for a daemon that has not written one. The plugin still does not
+// read config.toml itself -- it has no TOML parser and no business owning the
+// user's config -- which is why the daemon publishes the resolved table.
 var DEFAULT_APP_RULES = [
     { app_id: "teams-native", label: "Microsoft Teams", client_name: "Teams" },
     { app_id: "teams-pwa", label: "Microsoft Teams",
@@ -74,6 +85,7 @@ function emptyState() {
         queue_depth: 0,
         last_error: null,
         idle_was_inhibited: false,
+        detection_rules: [],
         updated_at: null,
         daemon_pid: 0,
         // Not part of the daemon's contract: set by parseState so the widget
@@ -112,9 +124,38 @@ function parseState(text) {
     view.queue_depth = Math.max(0, numberOr(raw.queue_depth, 0));
     view.last_error = stringOrNull(raw.last_error);
     view.idle_was_inhibited = raw.idle_was_inhibited === true;
+    view.detection_rules = parseRules(raw.detection_rules);
     view.updated_at = stringOrNull(raw.updated_at);
     view.daemon_pid = numberOr(raw.daemon_pid, 0);
     return view;
+}
+
+// The daemon's [[detection.apps]] table, as published in state.json. Every
+// field is coerced and a row missing an id or a label is dropped: this is a
+// file, and a widget that throws on a malformed one takes the bar down with it.
+function parseRules(raw) {
+    var out = [];
+    if (!Array.isArray(raw)) return out;
+    var fields = ["client_name", "binary", "window_class", "window_title_contains"];
+    for (var i = 0; i < raw.length; i++) {
+        var row = raw[i];
+        if (!row || typeof row !== "object") continue;
+        var app_id = String(row.app_id || "");
+        var label = String(row.label || "");
+        if (app_id === "" || label === "") continue;
+        var rule = { app_id: app_id, label: label };
+        for (var f = 0; f < fields.length; f++)
+            if (row[fields[f]]) rule[fields[f]] = String(row[fields[f]]);
+        out.push(rule);
+    }
+    return out;
+}
+
+// The rules to match against: the daemon's if it published any, else the
+// fallback compiled in above.
+function rulesFor(view) {
+    var rules = view && Array.isArray(view.detection_rules) ? view.detection_rules : [];
+    return rules.length ? rules : DEFAULT_APP_RULES;
 }
 
 function parseDetectedApp(raw) {
@@ -131,9 +172,29 @@ function parseDetectedApp(raw) {
 // rule "no timer ever writes this file" (contracts 7.2).
 function effectiveState(view, nowMs) {
     if (!view) return "idle";
-    if (view.state !== "done") return String(view.state || "idle");
+    var state = String(view.state || "idle");
+    if (isStale(view, nowMs)) {
+        // Nobody is behind this file any more. The live states become `failed`,
+        // whose primary action is `munin start --resume` -- which is what the
+        // user actually wants once the daemon is back and has recovered the
+        // session. `done` still ages out; the settled states are still true.
+        if (state === "recording" || state === "ending" || state === "detected")
+            return "failed";
+        if (state === "done") return "idle";
+        return state;
+    }
+    if (state !== "done") return state;
     var age = elapsedSeconds(view.since || view.updated_at, nowMs);
     return age >= 0 && age > DONE_VISIBLE_SECONDS ? "idle" : "done";
+}
+
+// Has the daemon missed enough heartbeats that this file cannot be believed?
+// A file that was never loaded is not stale, it is absent -- a different thing,
+// and the widget hides itself for it either way.
+function isStale(view, nowMs) {
+    if (!view || view.loaded !== true) return false;
+    var age = elapsedSeconds(view.updated_at, nowMs);
+    return age >= 0 && age > STALE_AFTER_SECONDS;
 }
 
 // ---------------------------------------------------------------- time
@@ -249,9 +310,13 @@ function barShowsDot(state) {
     return s === "recording" || s === "ending";
 }
 
+// Only `transcribing` spins, because only `transcribing` is work in progress.
+// `captured` means the audio is safe and the worker has not picked it up -- in
+// the PoC, where the backend is `none`, that is the *designed* end state and it
+// persists indefinitely. A spinner there is an infinite animation repainting the
+// bar forever, claiming work that nothing is doing.
 function barSpins(state) {
-    var s = String(state || "idle");
-    return s === "captured" || s === "transcribing";
+    return String(state || "idle") === "transcribing";
 }
 
 function barLabel(view, nowMs) {
@@ -280,6 +345,10 @@ function barLabel(view, nowMs) {
 
 function tooltipText(view, nowMs) {
     if (!view) return "Munin";
+    if (isStale(view, nowMs) && STATES.indexOf(String(view.state)) > 0) {
+        return "munin-rec has stopped answering. Anything it was recording "
+            + "ended when it did; the audio already written is kept.";
+    }
     var state = effectiveState(view, nowMs);
     var title = view.title ? view.title : "Untitled session";
     var who;
@@ -322,6 +391,17 @@ function primaryAction(state) {
     default:
         return { label: "Record", argv: ["munin", "start"] };
     }
+}
+
+// The one action that cannot live on a notification. `omarchy-notification-send`
+// takes exactly one `--exec`, and the "streams gone" notification spends it on
+// "Stop and transcribe" (contracts 8) -- so *Keep recording* has to be here.
+// `munin event call-started` is what cancels the grace period; `start --resume`
+// is not it, because the session is still recording.
+function secondaryAction(state) {
+    if (String(state || "idle") === "ending")
+        return { label: "Keep recording", argv: ["munin", "event", "call-started"] };
+    return null;
 }
 
 // Wrap an argv vector in a login shell without letting it be re-tokenized:
@@ -400,21 +480,30 @@ function sessionMeta(session) {
 //
 // Rules are tried in file order within each stage, which is why the loop runs
 // three times over the whole list rather than once per rule.
-function identify(clientName, windowClass, windowTitle, rules) {
+function identify(clientName, windowClass, windowTitle, rules, binary) {
     var list = Array.isArray(rules) && rules.length ? rules : DEFAULT_APP_RULES;
-    var client = String(clientName || "");
-    var cls = String(windowClass || "");
+    var client = String(clientName || "").toLowerCase();
+    var bin = String(binary || "").toLowerCase();
+    var cls = String(windowClass || "").toLowerCase();
     var title = String(windowTitle || "").toLowerCase();
     var i, rule;
 
+    // Every comparison is case-folded and the binary is a match shape of its
+    // own, because `detect/base.identify` does both: a rule that fires in the
+    // daemon and misses here would make detection depend on which source the
+    // config happens to name, which is the opposite of one match table.
     for (i = 0; i < list.length; i++) {
         rule = list[i];
-        if (rule && rule.client_name && client && rule.client_name === client)
+        if (!rule) continue;
+        if (rule.client_name && client && String(rule.client_name).toLowerCase() === client)
+            return { app_id: rule.app_id, label: rule.label, matched_by: "pipewire" };
+        if (rule.binary && bin && String(rule.binary).toLowerCase() === bin)
             return { app_id: rule.app_id, label: rule.label, matched_by: "pipewire" };
     }
     for (i = 0; i < list.length; i++) {
         rule = list[i];
-        if (rule && rule.window_class && cls && rule.window_class === cls)
+        if (rule && rule.window_class && cls
+            && String(rule.window_class).toLowerCase() === cls)
             return { app_id: rule.app_id, label: rule.label, matched_by: "window_class" };
     }
     for (i = 0; i < list.length; i++) {
@@ -486,10 +575,21 @@ function keySet(calls) {
 // then left off rather than sent as a lie.
 function callEventArgv(event, call, identity, windowTitle) {
     var argv = ["munin", "event", String(event)];
+    var started = String(event) === "call-started";
     if (call && numberOr(call.pid, 0) > 0) argv.push("--pid", String(Math.floor(call.pid)));
-    if (identity && identity.app_id) argv.push("--app", String(identity.app_id));
+    // `--app` is the human label and `--app-id` the rule id: the daemon writes
+    // both into session.json and the notification. Sending the rule id as the
+    // label made every recording's provenance read "teams-pwa / unknown".
+    if (identity && identity.label) argv.push("--app", String(identity.label));
+    if (identity && identity.app_id) argv.push("--app-id", String(identity.app_id));
+    // The playback handle is the whole point of the event. Without it the
+    // daemon has no app target, and the capturer writes a *silent* app track --
+    // a two-track recorder producing one track of meeting audio and one of
+    // nothing, unrecoverably, on the default configuration.
+    if (started && call && call.playback_handle)
+        argv.push("--handle", String(call.playback_handle));
     var title = String(windowTitle || "").trim();
-    if (title && String(event) === "call-started") argv.push("--title", title);
+    if (title && started) argv.push("--title", title);
     return argv;
 }
 

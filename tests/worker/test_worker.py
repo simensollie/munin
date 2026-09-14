@@ -324,3 +324,49 @@ def test_compute_gaps_ignores_segments_out_of_order_input(tmp_path):
         duration_seconds=6.0,
     )
     assert _compute_gaps([second, first]) == [(10.0, 120.0)]
+
+
+# ---------------------------------------------------------------------------
+# Racing the daemon for a session (D15). munin-work has no systemd unit, so an
+# uncaught exception here is a worker that stays dead until the user notices.
+
+
+def test_drain_skips_a_session_the_daemon_reopened_mid_sweep(tmp_path, monkeypatch):
+    """`munin start --resume` between the sweep's read and the claim."""
+    reopened = _make_session(tmp_path, state="captured", session_id="s-reopened")
+    other = _make_session(tmp_path, state="captured", session_id="s-other")
+    worker = Worker(_config(tmp_path))
+    worker.spool = FakeSpool([reopened, other])
+    monkeypatch.setattr("munin.worker.get_backend", lambda name: SucceedingBackend())
+
+    original = reopened.transition
+
+    def racing(to: str, *, by: str, **fields: object) -> None:
+        if to == "pending":
+            raise StateError(
+                "session.json says recording but this process holds captured"
+            )
+        original(to, by=by, **fields)
+
+    reopened.transition = racing  # type: ignore[method-assign]
+
+    touched = worker.drain()
+
+    assert touched == 1, "the session that lost the race is simply skipped"
+    assert other.state == "done"
+    assert reopened.state == "captured", "the daemon's write is never overwritten"
+
+
+def test_drain_skips_a_session_reopened_before_processing(tmp_path, monkeypatch):
+    session = _make_session(tmp_path, state="pending", session_id="s-pending")
+    worker = Worker(_config(tmp_path))
+    worker.spool = FakeSpool([session])
+    monkeypatch.setattr("munin.worker.get_backend", lambda name: SucceedingBackend())
+
+    def racing(to: str, *, by: str, **fields: object) -> None:
+        raise StateError("session.json says recording but this process holds pending")
+
+    session.transition = racing  # type: ignore[method-assign]
+
+    assert worker.drain() == 0, "a lost race must not take munin-work down"
+    assert session.state == "pending"

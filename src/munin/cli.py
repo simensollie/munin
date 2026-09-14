@@ -286,9 +286,26 @@ def _cmd_worker(args: argparse.Namespace) -> int:
 
 
 def _config() -> Any:
-    from munin.daemon import load_config
+    """The config for ``doctor`` and ``setup``, or defaults if it will not parse.
 
-    return load_config()
+    These are the two commands a user reaches for *because* the config is
+    broken, so neither may refuse to run over it. ``doctor.check_config``
+    re-reads the file itself and reports the parse error as a failing check
+    (exit 5, which the plugin and the installer branch on); ``setup
+    --write-default-config`` can then replace it. Refusing here turned both into
+    a bare "failed: ... is not valid TOML" and exit 1, with no check output at
+    all -- the one diagnosis the user needed, withheld.
+    """
+    from munin.config import Config, ConfigError
+    from munin.daemon import load_config
+    from munin.paths import munin_home
+
+    try:
+        return load_config()
+    except ConfigError as exc:
+        print(f"config: {exc}", file=sys.stderr)
+        print("continuing with defaults; the check below has the detail", file=sys.stderr)
+        return Config(home=munin_home())
 
 
 _DISPATCH = {

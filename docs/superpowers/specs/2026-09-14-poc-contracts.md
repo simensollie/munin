@@ -349,6 +349,13 @@ Rules the implementation must honour:
   always a pair and the worker never special-cases it.
 - `describe()` returns flat `str → str` for `munin doctor` and `status --json`
   (e.g. `{"method": ..., "mic": ..., "app": ..., "encoder": ...}`).
+- **Optional, not part of the ABC:** a capturer may offer
+  `failed_tracks() -> list[TrackHealth]`, a cheap non-blocking read of which
+  tracks have died while capture is running. The daemon polls it every 5 s where
+  it exists and treats its absence as "cannot answer", never as "healthy". It
+  has to be polled: ffmpeg's Ogg-Opus muxer writes nothing until close, so an
+  encoder killed mid-meeting is otherwise invisible until `stop`, by which time
+  the whole segment is gone.
 
 **Linux implementation (capture workstream), verified by the scouts:**
 
@@ -449,7 +456,7 @@ Evidence reaches it two ways, chosen by `detection.source`:
 
 | `detection.source` | Evidence path |
 |---|---|
-| `"plugin"` (default on Omarchy) | The shell plugin watches `Quickshell.Services.Pipewire` and calls `munin event call-started --pid … --app … --title …` / `munin event call-ended --pid …`. No polling in the daemon. |
+| `"plugin"` (default on Omarchy) | The shell plugin watches `Quickshell.Services.Pipewire` and calls `munin event call-started --pid … --app … --app-id … --handle … --title …` / `munin event call-ended --pid …`. No polling in the daemon. **`--handle` is not optional in practice:** it is the `object.serial` of §6's `playback_handle`, and without it the daemon has no app target and the capturer writes a *silent* app track. `--app` is the human label and `--app-id` the rule id, matching what the daemon's own poller passes. The plugin reports only calls its rule table identifies — condition 1 alone is a Discord call or a WebRTC page, not a meeting. |
 | `"daemon"` | `detect/linux.py` polls `pw-dump` + `hyprctl` every `detection.poll_seconds` and raises the same internal events. |
 | `"off"` | No detection. Ad-hoc only. |
 
@@ -509,6 +516,9 @@ input.
   "grace_deadline": null,
   "queue_depth": 2,
   "last_error": null,
+  "detection_rules": [
+    { "app_id": "teams-tab", "label": "Microsoft Teams", "window_title_contains": "Microsoft Teams" }
+  ],
   "updated_at": "2026-09-14T13:25:08+02:00",
   "daemon_pid": 4211
 }
@@ -520,6 +530,19 @@ session yet); `transcribing`, `done` and `failed` are mirrored from the newest
 session's `session.json`. `started_at` lets the plugin compute elapsed time
 itself, so **no timer ever writes this file**. `grace_deadline` is set only in
 `ending`. `queue_depth` is the count of sessions in `inbox/`.
+
+`detection_rules` is the resolved `[[detection.apps]]` table, flattened with
+empty fields dropped. The plugin is the default detection source and has no TOML
+parser, so this is how D13 ("another application is a row in `config.toml`, never
+code") reaches it; the plugin falls back to its own compiled-in table only when
+the key is absent or empty.
+
+**A reader must treat this file as stale when `updated_at` is older than three
+heartbeats (90 s).** `state.json` lives in `$XDG_RUNTIME_DIR` and survives a
+SIGKILL'd daemon, pid and `state: "recording"` intact — the heartbeat is the only
+liveness signal there is, which is why one is written at all. A stale
+`recording`/`ending`/`detected` renders as `failed`, never as a live recording:
+a pulsing indicator with no daemon behind it is worse than none (D10).
 
 **The plugin reads this file with `FileView { watchChanges: true }` and calls the
 CLI for actions. It never opens the socket** — one client of the wire protocol,
@@ -543,6 +566,8 @@ which is what "offered alongside rather than instead" already promised.
 | Call detected | `normal`, `-t 30000` | "Meeting detected" / app label and time | `munin start --from-detection` | Panel: *Not this one* (dismiss). *Never for this meeting* is deferred — it needs the calendar series id (M9). |
 | Streams gone 1 min (`warn_seconds`) | `normal`, `-t 60000` | "Meeting looks finished" / "Stops by itself at 2:00" | `munin stop` | Panel and keybind: *Keep recording* (`munin start --resume` is not it — the session is still recording; the panel calls `munin event call-started` to cancel the grace period). |
 | Auto-stopped | `critical` on failure, else `normal` | "Recording stopped" / "*n* min captured, queued for transcription" | `munin start --resume` | Panel: *Open session*. |
+| A capture track died mid-meeting | `critical` | "A recording track stopped" / which track, and that the rest is still being captured | `munin stop` | — (once per track per session; a dead microphone ends the session instead and notifies as *Auto-stopped*). |
+| The app stream could not be bound | `critical` | "Recording the whole desktop" / the application's own audio could not be bound, so the meeting track holds everything this machine plays | `munin stop` | — (spec §12: a sink-monitor track holds people who were never in the meeting, and telling the user afterwards through `app_source` is too late to stop it). |
 
 D14 holds: auto-stop **always** notifies. `-r <id>` is used to replace the
 previous Munin notification rather than stacking, with a stable id per session.
@@ -687,7 +712,7 @@ def pensieve_filename(title: str) -> str           # "<title>-transcript.txt"
 | `toggle` | `[title]` | Start if idle, stop if recording. The keybind target. |
 | `status` | `--json` | Human line, or the §7.2 state view verbatim. |
 | `list` | `--limit N` `--json` | Recent sessions with state and pending reason. |
-| `event` | `call-started\|call-ended` `--pid` `--app` `--title` | Feed detection evidence from the plugin. |
+| `event` | `call-started\|call-ended` `--pid` `--app` `--app-id` `--handle` `--title` | Feed detection evidence from the plugin. |
 | `doctor` | `--json` | Every check, one line each, per-platform table (§16.5). |
 | `setup` | `--non-interactive`, `--write-default-config` (create the root and `config.toml`, then stop — what `install.sh` step 7 calls) | Create `~/munin/`, write `config.toml`, pick the mic. |
 | `daemon` | `--foreground` (default under systemd) | Run `munin-rec`. |
@@ -772,7 +797,7 @@ WantedBy=graphical-session.target
 | 1 | Check `python3 >= 3.12`, `ffmpeg`, `pw-record`, `pw-dump`, `hyprctl`, `omarchy`. Print what is missing and the `omarchy pkg add` line; never run `sudo` (non-interactive `sudo` fails on this machine). | nothing |
 | 2 | `python3 -m venv ~/.local/share/munin/venv` and `venv/bin/pip install <repo>` | `~/.local/share/munin/venv` |
 | 3 | Symlink `~/.local/bin/{munin,munin-rec,munin-work}` → the venv's scripts | `~/.local/bin` |
-| 4 | Copy `plugin/local.munin/` → `~/.config/omarchy/plugins/local.munin/`, then `omarchy plugin validate` it, `omarchy-shell shell rescanPlugins`, `omarchy plugin enable local.munin`, `omarchy bar put local.munin --before omarchy.tray` | `~/.config/omarchy/plugins/` |
+| 4 | Copy `plugin/local.munin/` → `~/.config/omarchy/plugins/local.munin/`, then `omarchy plugin validate` it, `omarchy-shell shell rescanPlugins`, `omarchy plugin enable local.munin --before omarchy.tray`. The placement rides along with `enable`, which already places a bar-widget (at the section's default anchor, *after* `omarchy.tray`); a later `bar put` is too late. This step needs a running shell, so a failure here **warns and prints the command to run later** rather than aborting steps 5-7. | `~/.config/omarchy/plugins/` |
 | 5 | Append the keybind to `~/.config/hypr/bindings.lua` | see below |
 | 6 | Copy `systemd/munin.service` → `~/.config/systemd/user/`, **print** the `systemctl --user enable --now munin.service` line rather than running it (enablement is never committed) | `~/.config/systemd/user/` |
 | 7 | `munin setup --non-interactive`: create `$MUNIN_HOME` and a default `config.toml` | `~/munin/` |
@@ -781,11 +806,15 @@ WantedBy=graphical-session.target
 
 **The keybind file is a symlink.** `~/.config/hypr/bindings.lua` resolves into the
 dotfiles repo (`~/dev/dotfiles/omarchy/hypr/bindings.lua`). The installer must:
-resolve the symlink, back up the **target** (`<target>.munin-backup-<ISO date>`),
-append through the link so the dotfiles repo sees the edit, and **say so on
-stdout** — naming the real path and that it is a tracked file in another repo.
-Silently editing someone's dotfiles repo is the one thing an installer must not
-do quietly.
+resolve the symlink, back up the **target** to
+`$XDG_STATE_HOME/munin/bindings.lua.<timestamp>.bak`, append through the link so
+the dotfiles repo sees the edit, and **say so on stdout** — naming the real path
+and that it is a tracked file in another repo. Silently editing someone's
+dotfiles repo is the one thing an installer must not do quietly, and that
+includes leaving an untracked `.munin-bak` in it: the backup lives in munin's own
+state directory, is written fresh whenever the block is added, and is removed by
+`--uninstall` once the block is gone. `--uninstall` also reloads Hyprland, since
+the same run deletes the binary the key points at.
 
 ```lua
 o.bind("SUPER + SHIFT + R", "Record meeting", "munin toggle")
@@ -934,3 +963,49 @@ this section is later and wins.
 6. **Retention is still undecided** (§15.5). The PoC accumulates audio
    indefinitely, and `app_source` now records that some of that audio may be
    wider than the meeting.
+
+
+---
+
+### 16.4 Review pass on the merged PoC
+
+A full review of `poc` after integration. Everything below is a code change;
+where it also moved a contract, the relevant section above has been updated in
+place and this table says which.
+
+**Daemon**
+
+| # | Problem | Fix |
+|---|---|---|
+| 1 | `Spool.recover_for_daemon()` had **no production caller**. A daemon killed by SIGKILL, an OOM kill or a power cut left its session at `recording` forever: the worker only ever looks at `captured`/`pending`, so the audio was stranded outside the pipeline, and `state.json` kept telling the bar a recording was live. | `Daemon.run()` calls it before the first `state.json` write, guarded, the way `Worker.main()` already called `recover()`. `_refresh_idle_state()` additionally refuses to publish `recording`/`ending` while `self.session is None`, mapping to `captured` or `failed` by whether audio exists — defence for debris recovery could not reach. |
+| 2 | With `detection.source = "daemon"`, an **ad-hoc recording auto-stopped after `grace_seconds`**: the poller's else branch ended a call for a session that had no detected pid at all. | The else branch acts only on a watched pid, and `on_call_ended` refuses a recording whose session has no detected application. |
+| 3 | `_playback_handle` was cleared only on an auto-stop, so a handle outlived the call it named. The next recording bound a dead node, and `pw-record` answers a dead `--target` with the **desktop-sink monitor** — the whole machine's audio, from people who saw no prompt (§3, `app_source`). | `_forget_detected()` clears the handle on every path where the call stops being live, including `on_call_ended` outside a recording; `_targets()` refuses a handle without a live detection. A manual stop during a *live* call keeps it, so a resume rebinds the same stream. |
+| 4 | A daemon/worker race on `session.json` raised `StateError` that neither side caught: it **killed `munin-work`** (which has no unit to restart it) and turned `munin start --resume` into an internal error. | `Worker.drain()` skips a session that lost the race and re-reads it next sweep; `Daemon.handle_start()` falls through to a fresh session, which is what a closed resume window does anyway. |
+| 5 | `shutdown()` called `inhibit_idle(False)` even when the daemon had never recorded, so a `systemctl --user restart` or a logout **switched off a stay-awake the user had set by hand**. | The daemon releases only a hold it took (`_idle_held`). §12's rule is unchanged; it is now actually honoured on the non-recording path. |
+| 6 | `systemd/munin.service` had no `KillMode`, so the default control-group kill SIGTERMed `pw-record` and `ffmpeg` alongside the daemon on every stop and every logout — defeating `capture/linux.py`'s deliberate stop ordering and risking an Ogg file with no trailer. | `KillMode=mixed` and `TimeoutStopSec=60`. |
+| 7 | Nothing polled `Capturer.failed_tracks()`. An encoder OOM-killed five minutes into an hour was invisible until `stop`, and ffmpeg writes nothing until close — so the whole hour was gone. The sink-monitor fallback was equally silent. | `tick()` polls capture health every 5 s: a dead microphone finishes the session and notifies (D14), a dead app track notifies once and keeps the microphone. The fallback to a wider capture now notifies at `start`, while the user can still stop it. Two notifications added (§8). |
+
+**Plugin**
+
+| # | Problem | Fix |
+|---|---|---|
+| 8 | `callEventArgv` never sent `--handle`, so on the **default configuration** a plugin-detected call recorded a silent app track: mic audio and nothing else, unrecoverable. It also sent the rule id in `--app` and never sent `--app-id`, so every recording's provenance read `teams-pwa / unknown`. | Both fixed; §6 and §11 updated. `playback_handle` is `object.serial` only — the `|| n.id` fallback is gone, since a node id is a different namespace from a serial. |
+| 9 | `finishResolve` reported a call even when `identify()` returned null, so **condition 1 alone raised the D4 prompt**: a Discord call, a Signal call or any WebRTC page. | The event is sent only for an identified call, matching the daemon's own poller. |
+| 10 | `ownersFromNodes` classified any non-sink stream as a capture stream, **video included**, so a screen-share plus a playing tab satisfied condition 1. | Nodes with no `audio` interface are skipped, as `panels/audio/Panel.qml` already does. |
+| 11 | `Model.identify` was case-sensitive and had no `binary` stage, unlike `detect/base.identify`, and the plugin never saw the user's config — so D13 did not hold on the default path. | Casefolded, `binary` stage added, and the daemon now publishes the resolved table as `detection_rules` in `state.json` (§7.2). |
+| 12 | `captured` never expired and `barSpins("captured")` was true, so the PoC's **designed end state** left an infinite rotation animation repainting the bar forever, claiming work nothing was doing. | Only `transcribing` spins. |
+| 13 | `updated_at` was parsed and never used, so a killed daemon left the bar showing a live, counting recording indefinitely — and the plugin kept spawning `munin event` at a dead socket. | `Model.isStale` (90 s) gates `daemonRunning` and `effectiveState`; §7.2 documents the rule. |
+| 14 | The panel offered no **Keep recording** during `ending`, the one place §8 says that action must live. | A second panel button and the `k` key, calling `munin event call-started`; the panel also shows the grace deadline. |
+
+**Install, CLI and doctor**
+
+| # | Problem | Fix |
+|---|---|---|
+| 15 | `omarchy plugin enable` already *places* a bar-widget, at the section's default anchor (after `omarchy.tray`), so the following `bar put --before` was too late and the widget landed on the wrong side. The test shim hid it by making `enable` a no-op. | The placement rides along with `enable`; the shim now places on enable the way the real registry does. §13 step 4 updated. |
+| 16 | A malformed `config.toml` made **`munin doctor` and `munin setup` refuse to run** — the two commands a user reaches for because the config is broken. | `cli._config()` falls back to defaults and warns; `doctor.check_config` reports the parse error as a failing check (exit 5). |
+| 17 | The keybinding backup was written **inside the dotfiles repository**, never refreshed, and never removed by `--uninstall`. | It goes to `$XDG_STATE_HOME/munin/bindings.lua.<timestamp>.bak`, fresh each time the block is added, and both it and the legacy in-place backup are removed on uninstall. §13 updated. |
+| 18 | `--uninstall` removed the keybind block but never reloaded Hyprland, leaving `SUPER + SHIFT + R` bound to a binary the same run deleted. | `uninstall_keybind` reloads. |
+| 19 | `munin doctor` reported `detection: ok — no call in progress` when the detector **could not reach PipeWire at all**: `scan()` swallows a `pw-dump` failure by design, and an empty scan and a dead probe are the same empty list. Detection is the whole basis of D4. | The check reads `describe()["pw_error"]` and fails the row with the `pw-dump` error. |
+| 20 | Step 4 was fatal while steps 3 and 6 only warned, so an install started **without a reachable Omarchy shell** (ssh, a bare TTY, a first boot) aborted with the venv and plugin in place but no keybind, no unit and no data root. | Step 4 warns, prints the command to run once the shell is up, and steps 5-7 complete. |
+
+None of D1-D21 was reopened, and no frozen file was edited.

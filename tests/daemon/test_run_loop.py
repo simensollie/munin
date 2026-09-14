@@ -233,3 +233,124 @@ def test_pending_is_shown_as_captured(harness: Harness) -> None:
     clock.advance(HEARTBEAT_SECONDS + 1)
     daemon.tick()
     assert json.loads(harness.state_path.read_text())["state"] == "captured"
+
+
+# ---------------------------------------------------------------------------
+# Crash recovery at start (spec 11). A SIGKILL, an OOM kill or a power cut skips
+# shutdown() entirely, so the next munin-rec inherits a session still marked
+# `recording` -- with real audio in it.
+# ---------------------------------------------------------------------------
+
+
+def _strand_a_recording(harness: Harness, *, with_audio: bool) -> Any:
+    """Leave a session in `recording` the way a killed daemon would."""
+    session = harness.spool.create(
+        title="Weekly quality sync", source="adhoc", now=harness.clock()
+    )
+    segment = harness.spool.add_segment(session, 1)
+    if with_audio:
+        (session.directory / segment.mic).write_bytes(b"OpusHead-fake")
+    return session
+
+
+def test_a_killed_daemon_recovers_its_session_at_start(harness: Harness) -> None:
+    """The audio reaches the worker, and the bar stops claiming a live recording."""
+    session = _strand_a_recording(harness, with_audio=True)
+    assert session.state == "recording"
+
+    harness.daemon._stopping = True  # serve_forever returns on the first check
+    assert harness.daemon.run() == 0
+
+    assert harness.spool.load(session.id).state == "captured"
+    assert (harness.home / "inbox" / session.id).is_symlink(), (
+        "a recovered session that never reaches the inbox is invisible to munin-work"
+    )
+    state = json.loads(harness.state_path.read_text(encoding="utf-8"))
+    assert state["state"] == "captured"
+    assert state["session_id"] == session.id
+
+
+def test_a_killed_daemon_with_no_audio_recovers_the_session_as_failed(
+    harness: Harness,
+) -> None:
+    session = _strand_a_recording(harness, with_audio=False)
+
+    harness.daemon._stopping = True
+    assert harness.daemon.run() == 0
+
+    assert harness.spool.load(session.id).state == "failed"
+    assert json.loads(harness.state_path.read_text(encoding="utf-8"))["state"] == "failed"
+
+
+def test_recovery_that_throws_does_not_stop_the_daemon_binding(harness: Harness) -> None:
+    def broken() -> list[Any]:
+        raise RuntimeError("session.json is unreadable")
+
+    harness.spool.recover_for_daemon = broken  # type: ignore[method-assign]
+    _strand_a_recording(harness, with_audio=True)
+
+    harness.daemon._stopping = True
+    assert harness.daemon.run() == 0, "one broken session must not cost us the socket"
+
+
+def test_state_json_never_reports_a_recording_this_daemon_is_not_making(
+    harness: Harness,
+) -> None:
+    """D10: the bar is the only reliable stop control, so it must never lie.
+
+    Recovery has been sabotaged here, so the stranded session survives into
+    ``_refresh_idle_state`` -- which must still refuse to publish `recording`.
+    """
+    harness.spool.recover_for_daemon = lambda: []  # type: ignore[method-assign]
+    _strand_a_recording(harness, with_audio=True)
+
+    harness.daemon._stopping = True
+    harness.daemon.run()
+
+    state = json.loads(harness.state_path.read_text(encoding="utf-8"))
+    assert state["state"] == "captured"
+    assert harness.daemon.session is None
+
+
+# ---------------------------------------------------------------------------
+# Detection polling must not end a recording it never identified.
+# ---------------------------------------------------------------------------
+
+
+def test_an_adhoc_recording_survives_the_daemon_poller(harness: Harness) -> None:
+    """`munin start` in a room with no call must not auto-stop two minutes in."""
+    from dataclasses import replace
+
+    daemon, clock = harness.daemon, harness.clock
+    daemon.config = replace(
+        daemon.config, detection=replace(daemon.config.detection, source="daemon")
+    )
+    daemon._detector = ScriptedDetector([[]])
+
+    started = daemon.handle_start({"title": "Weekly quality sync"})
+    clock.advance(5)
+    daemon.tick()
+    assert daemon.state.state == "recording", "no detected call means nothing ended"
+
+    clock.advance(daemon.config.detection.grace_seconds + 60)
+    daemon.tick()
+    assert daemon.state.state == "recording"
+    assert harness.session_json(started["session_id"])["state"] == "recording"
+
+
+# ---------------------------------------------------------------------------
+# The unit file. The daemon's clean-shutdown ordering only survives if systemd
+# signals munin-rec alone rather than the whole cgroup.
+# ---------------------------------------------------------------------------
+
+
+def test_the_unit_signals_only_the_daemon_on_stop() -> None:
+    from pathlib import Path
+
+    unit = Path(__file__).resolve().parents[2] / "systemd" / "munin.service"
+    body = unit.read_text(encoding="utf-8")
+    assert "KillMode=mixed" in body, (
+        "control-group kill would SIGTERM pw-record and ffmpeg alongside the "
+        "daemon, and the Ogg trailer is written by the ordering munin-rec runs"
+    )
+    assert "TimeoutStopSec=" in body

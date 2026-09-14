@@ -32,6 +32,7 @@ __all__ = [
     "FakeSegment",
     "FakeSession",
     "FakeSpool",
+    "FakeTrackHealth",
     "recording_capturer_factory",
 ]
 
@@ -48,6 +49,15 @@ class FakeClock:
     def advance(self, seconds: float) -> datetime:
         self.now = self.now + timedelta(seconds=seconds)
         return self.now
+
+
+@dataclass(frozen=True)
+class FakeTrackHealth:
+    """The shape of :class:`munin.capture.linux.TrackHealth` the daemon reads."""
+
+    kind: str
+    detail: str
+    alive: bool = False
 
 
 @dataclass
@@ -210,6 +220,45 @@ class FakeSpool:
         ordered = sorted(self.sessions, key=lambda s: s.id, reverse=True)
         return ordered[0] if ordered else None
 
+    def sessions_in_state(self, *states: str) -> list[FakeSession]:
+        return [s for s in self.sessions if s.state in states]
+
+    def recover_for_daemon(self) -> list[FakeSession]:
+        """Mirrors :meth:`munin.spool.Spool.recover_for_daemon`.
+
+        A session still ``recording`` or ``ending`` is what a SIGKILL'd daemon
+        leaves behind: playable audio becomes ``captured`` with an inbox link,
+        an empty directory becomes ``failed``.
+        """
+        recovered: list[FakeSession] = []
+        at = self.clock()
+        for session in self.sessions_in_state("recording", "ending"):
+            has_audio = any(
+                (session.directory / name).is_file()
+                for segment in session.segments
+                for name in (segment.mic, segment.app)
+            )
+            if has_audio:
+                for segment in session.segments:
+                    if segment.stopped_at is None:
+                        segment.stopped_at = session.stopped_at or at
+                session.transition(
+                    "captured", by="munin-rec", stopped_at=session.stopped_at or at
+                )
+                self.link_inbox(session)
+            else:
+                session.transition(
+                    "failed",
+                    by="munin-rec",
+                    error={
+                        "code": "interrupted",
+                        "message": "munin-rec stopped before any audio was written",
+                        "at": _iso(at),
+                    },
+                )
+            recovered.append(session)
+        return recovered
+
     def resumable(self, *, now: datetime | None = None) -> FakeSession | None:
         current = now or self.clock()
         latest = self.latest()
@@ -267,6 +316,10 @@ class FakeCapturer(Capturer):
         self.started_at: datetime | None = None
         self._paths: tuple[Path, Path] | None = None
         self._index = 0
+        #: What the app track holds, as contracts section 3's ``app_source``.
+        self.app_source = "silent" if app is None else "stream"
+        #: Track kinds the test has killed mid-capture.
+        self.dead_tracks: list[str] = []
 
     @property
     def is_running(self) -> bool:
@@ -306,9 +359,19 @@ class FakeCapturer(Capturer):
         self._paths = None
         return result
 
+    def failed_tracks(self) -> list[FakeTrackHealth]:
+        """The tracks the test has declared dead, while capture is running."""
+        if not self.is_running:
+            return []
+        return [
+            FakeTrackHealth(kind=kind, detail=f"{kind} encoder exited 137")
+            for kind in self.dead_tracks
+        ]
+
     def describe(self) -> dict[str, str]:
         return {"method": self.method, "mic": self.mic.label,
-                "app": self.app.label if self.app else "none"}
+                "app": self.app.label if self.app else "none",
+                "app_source": self.app_source}
 
 
 def recording_capturer_factory(clock: Callable[[], datetime], **kwargs: Any):

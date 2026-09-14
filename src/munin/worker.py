@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import signal
 import time
 from datetime import datetime
@@ -29,6 +30,8 @@ from munin.pipeline.render import adjust_segments, pensieve_filename, render_tra
 from munin.spool import Segment, Session, Spool, StateError
 
 __all__ = ["Worker", "main"]
+
+log = logging.getLogger("munin.worker")
 
 #: Written to pending_reason when a crash-recovered session is reset (spec 11).
 STALE_TRANSCRIBING_REASON = "worker restarted while this session was transcribing"
@@ -191,7 +194,17 @@ class Worker:
         touched: set[str] = set()
         for session in list(self.spool.iter_sessions()):
             if session.state == "captured":
-                self.claim(session)
+                # A session read in this sweep may have moved since: `munin
+                # start --resume` takes captured/pending back to recording, and
+                # that is the daemon's transition to make (D15). Losing the race
+                # is ordinary, so the sweep skips the session and re-reads it
+                # next time round -- it must never take munin-work down, which
+                # has no unit to restart it.
+                try:
+                    self.claim(session)
+                except StateError as exc:
+                    log.info("skipping %s: %s", session.id, exc)
+                    continue
                 touched.add(session.id)
         for session in list(self.spool.iter_sessions()):
             if session.state != "pending":
@@ -207,7 +220,11 @@ class Worker:
                 # grows session.json without bound. The session is retried the
                 # moment a backend reports itself available.
                 continue
-            self.process(session)
+            try:
+                self.process(session)
+            except StateError as exc:  # the daemon reopened it; see above
+                log.info("skipping %s: %s", session.id, exc)
+                continue
             touched.add(session.id)
         return len(touched)
 

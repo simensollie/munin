@@ -92,6 +92,16 @@ PLUGIN_DIR="$PLUGIN_ROOT/$PLUGIN_ID"
 UNIT_DIR="$HOME_DIR/.config/systemd/user"
 BINDINGS_LINK="$HOME_DIR/.config/hypr/bindings.lua"
 SHELL_JSON="$HOME_DIR/.config/omarchy/shell.json"
+# Munin's own state, and where the keybinding backup goes. Not next to the file
+# it backs up: that file is a symlink into somebody's dotfiles repository, and a
+# stray `bindings.lua.munin-bak` there is untracked litter an uninstall would
+# never reach and a `git add -A` would happily commit. $XDG_STATE_HOME is
+# ignored under --prefix-home so the tests stay inside their own tmp directory.
+if [[ -n $PREFIX_HOME ]]; then
+  STATE_DIR="$HOME_DIR/.local/state/munin"
+else
+  STATE_DIR="${XDG_STATE_HOME:-$HOME_DIR/.local/state}/munin"
+fi
 DATA_HOME="${MUNIN_HOME:-$HOME_DIR/munin}"
 OMARCHY_DEFAULT_BINDINGS="${OMARCHY_DEFAULT_BINDINGS:-/usr/share/omarchy/default/hypr/bindings}"
 
@@ -261,6 +271,21 @@ bar_has_plugin() {
   [[ $found != "0" ]]
 }
 
+# Everything in this step needs a *running* Omarchy shell: `omarchy plugin
+# enable` talks to it over a socket and says so itself ("the shell is expected
+# to already be running; this command does not start it"). Installing over ssh,
+# from a bare TTY, or before the first graphical login is ordinary, and it must
+# not abort the install: steps 5-7 (keybind, unit, data root) are filesystem
+# work that has nothing to do with the shell, and stranding a half-install with
+# no data root is worse than a plugin that is enabled by hand a minute later.
+shell_step_deferred() {
+  warn "$1"
+  warn "the Omarchy shell is not reachable; the plugin is installed but not enabled"
+  say "  Once the shell is running, finish this step yourself with:"
+  say "      omarchy plugin enable $PLUGIN_ID --before $BAR_ANCHOR"
+  return 0
+}
+
 step_plugin_enable() {
   step 4 "Enabling the plugin and placing it on the bar"
   if ! have omarchy; then
@@ -270,15 +295,21 @@ step_plugin_enable() {
   if have omarchy-shell; then
     run omarchy-shell shell rescanPlugins || warn "rescanPlugins failed; is the shell running?"
   fi
-  run omarchy plugin enable "$PLUGIN_ID" || fail 4 "omarchy plugin enable $PLUGIN_ID failed"
-  info "enabled $PLUGIN_ID"
+  # The placement has to ride along with `enable`. Enabling a plugin that
+  # declares a bar-widget already puts it on the bar, at the registry's default
+  # anchor for its section -- which for "right" is *after* omarchy.tray -- and a
+  # `bar put` afterwards is a no-op on a widget that is already placed. So this
+  # call is the only moment the position can be chosen at all.
   if bar_has_plugin; then
     info "$PLUGIN_ID is already on the bar; left where it is"
+    run omarchy plugin enable "$PLUGIN_ID" ||
+      { shell_step_deferred "omarchy plugin enable $PLUGIN_ID failed"; return 0; }
   else
-    run omarchy bar put "$PLUGIN_ID" --before "$BAR_ANCHOR" ||
-      fail 4 "omarchy bar put $PLUGIN_ID --before $BAR_ANCHOR failed"
+    run omarchy plugin enable "$PLUGIN_ID" --before "$BAR_ANCHOR" ||
+      { shell_step_deferred "omarchy plugin enable $PLUGIN_ID --before $BAR_ANCHOR failed"; return 0; }
     info "placed $PLUGIN_ID on the bar before $BAR_ANCHOR"
   fi
+  info "enabled $PLUGIN_ID"
 }
 
 # ---------------------------------------------------------------------------
@@ -344,13 +375,14 @@ step_keybind() {
     return 0
   fi
 
-  local backup="$target.munin-bak"
-  if [[ -e $backup ]]; then
-    info "backup already exists, kept: $backup"
-  else
-    run cp -p "$target" "$backup" || fail 5 "could not back up $target"
-    info "backed up $target -> $backup"
-  fi
+  # Timestamped, and a fresh one every time the block is actually added: a
+  # backup kept from an earlier install is a snapshot of a file edited many
+  # times since, so restoring from it would revert somebody else's work.
+  local backup
+  backup="$STATE_DIR/$(basename "$target").$(date +%Y-%m-%dT%H%M%S).bak"
+  run mkdir -p "$STATE_DIR"
+  run cp -p "$target" "$backup" || fail 5 "could not back up $target"
+  info "backed up $target -> $backup"
 
   {
     printf '\n%s\n' "$MARK_BEGIN"
@@ -452,6 +484,20 @@ uninstall_keybind() {
   cat "$tmp" >"$target"
   rm -f "$tmp"
   info "removed the munin block from $target"
+
+  # The block is gone, so the backups have nothing left to restore. Includes the
+  # pre-1.0 in-place backup, which earlier installs left inside the dotfiles
+  # repository itself.
+  local stale
+  for stale in "$STATE_DIR/$(basename "$target")".*.bak "$target.munin-bak"; do
+    [[ -e $stale ]] || continue
+    rm -f "$stale"
+    info "removed the backup $stale"
+  done
+
+  # Hyprland still holds the binding until it is told otherwise, and the same
+  # uninstall is about to delete the `munin` binary it points at.
+  reload_hypr
 }
 
 uninstall_plugin() {

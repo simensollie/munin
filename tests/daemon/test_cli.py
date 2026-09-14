@@ -208,6 +208,41 @@ def test_doctor_delegates_and_survives_a_stub(capsys) -> None:
         assert "not implemented" in capsys.readouterr().err
 
 
+def test_doctor_still_runs_when_the_config_will_not_parse(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """The one check that names the problem must not be refused because of it."""
+    home = tmp_path / "munin"
+    (home / "recordings").mkdir(parents=True)
+    (home / "inbox").mkdir()
+    (home / "voices").mkdir()
+    (home / "config.toml").write_text('[capture\nmic_source = "default"\n', encoding="utf-8")
+    monkeypatch.setenv("MUNIN_HOME", str(home))
+
+    code = cli.main(["doctor"])
+    out = capsys.readouterr()
+
+    assert code == cli.EXIT_CHECK_FAILED, "a bad config is a failing check, not a crash"
+    assert "config" in out.out
+    assert "is not valid TOML" in out.out + out.err
+
+
+def test_setup_still_runs_when_the_config_will_not_parse(
+    tmp_path, monkeypatch, capsys
+) -> None:
+    """`munin setup --write-default-config` is how the user repairs it."""
+    home = tmp_path / "munin"
+    home.mkdir(parents=True)
+    (home / "config.toml").write_text("this is not = = toml\n", encoding="utf-8")
+    monkeypatch.setenv("MUNIN_HOME", str(home))
+
+    code = cli.main(["setup", "--write-default-config"])
+    out = capsys.readouterr()
+
+    assert code == cli.EXIT_OK, "setup must not refuse to run over the file it repairs"
+    assert "is not valid TOML" in out.err
+
+
 def test_worker_delegates_and_survives_a_stub(capsys) -> None:
     code = cli.main(["worker", "--once"])
     assert code in (cli.EXIT_OK, cli.EXIT_ERROR)

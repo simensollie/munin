@@ -58,8 +58,13 @@ Item {
     // Named muninState, not `state`: Item already has a `state` property and
     // shadowing it would make every QML reader wonder which one they have.
     readonly property string muninState: status ? String(status.state) : "idle"
+    // `loaded` and a pid are not enough: state.json outlives a SIGKILL'd daemon,
+    // pid and all. The 30 s heartbeat is the liveness signal, and Model.isStale
+    // is what reads it. Without this the plugin keeps spawning `munin event`
+    // at a socket nobody is listening on, and the bar keeps counting a
+    // recording that ended when the process did.
     readonly property bool daemonRunning: !!status && status.loaded === true
-        && status.daemon_pid > 0
+        && status.daemon_pid > 0 && !Model.isStale(status, Date.now())
 
     function applyState(text) {
         service.status = Model.parseState(text);
@@ -93,14 +98,21 @@ Item {
 
     // --- detection, condition 1 of spec 6.3 ----------------------------
 
-    // Every PipeWire stream node, sinks and sources alike. Streams only:
-    // devices are not what a call is made of.
+    // Every PipeWire *audio* stream node, sinks and sources alike. Streams only:
+    // devices are not what a call is made of -- and neither is video. A
+    // Stream/Input/Video node (a screencast through xdg-desktop-portal, or a
+    // webcam) publishes isStream true and isSink false, so classifying on
+    // isSink alone would book it as a capture stream and let "Chrome plays a
+    // video in one tab while sharing its screen" satisfy condition 1. That is
+    // precisely the false positive spec 6.3's second condition exists to
+    // remove. `audio` is null on a non-audio node, which is the same gate
+    // panels/audio/Panel.qml uses on its own stream list.
     readonly property var streamNodes: {
         var out = [];
         var nodes = Pipewire.nodes ? Pipewire.nodes.values : [];
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i];
-            if (n && n.isStream) out.push(n);
+            if (n && n.isStream && n.audio) out.push(n);
         }
         return out;
     }
@@ -155,7 +167,7 @@ Item {
         var nodes = service.streamNodes;
         for (var i = 0; i < nodes.length; i++) {
             var n = nodes[i];
-            if (!n || !n.ready) continue;
+            if (!n || !n.ready || !n.audio) continue;
             var p = nodeProps(n);
 
             var pid = Number(p["application.process.id"] || 0);
@@ -185,8 +197,12 @@ Item {
             // source.
             if (n.isSink === true) {
                 owner.playback = true;
+                // `object.serial` and nothing else: contracts section 6 fixes
+                // the handle as the output node's serial, which is what
+                // `pw-record --target` takes. A node id is a different
+                // namespace -- handing one over binds the wrong node or none.
                 if (!owner.playback_handle)
-                    owner.playback_handle = String(p["object.serial"] || n.id || "");
+                    owner.playback_handle = String(p["object.serial"] || "");
             } else {
                 owner.capture = true;
             }
@@ -304,9 +320,22 @@ Item {
         var call = service.resolveCurrent;
         service.resolveCurrent = null;
         if (call) {
+            // The daemon's own `[[detection.apps]]` table, published in
+            // state.json, with the plugin's compiled-in copy only as a fallback
+            // for a daemon too old to send it (D13: another application is a
+            // row in config.toml, never code).
             var identity = Model.identify(call.client_name, windowClassOf(ipc),
-                                          windowTitleOf(ipc), Model.DEFAULT_APP_RULES);
-            send(Model.callEventArgv("call-started", call, identity, windowTitleOf(ipc)));
+                                          windowTitleOf(ipc),
+                                          Model.rulesFor(service.status),
+                                          call.binary);
+            // Both conditions of spec 6.3, not just the first. An unidentified
+            // owner holding a playback and a capture stream is a Discord call,
+            // a Signal call, a WebRTC page -- conversations Munin was never
+            // asked to care about, whose participants saw no prompt. Reporting
+            // one would raise the D4 "record this?" notification for it.
+            if (identity)
+                send(Model.callEventArgv("call-started", call, identity,
+                                         windowTitleOf(ipc)));
         }
         nextResolve();
     }
@@ -352,10 +381,16 @@ Item {
         Quickshell.execDetached(Model.muninArgv(argv));
     }
 
-    // Kept for the bar widget and for anything that wants to drive the
-    // detection path by hand.
-    function reportCallStarted(pid, app, title) {
-        send(Model.callEventArgv("call-started", { pid: pid }, { app_id: app }, title));
+    // Kept for the bar widget's "Keep recording" and for anything that wants to
+    // drive the detection path by hand. `handle` is optional but matters: with
+    // no playback handle the daemon has no app target and the capturer writes a
+    // silent app track, so pass the call's handle whenever one is known.
+    function reportCallStarted(pid, app, title, handle, appId) {
+        send(Model.callEventArgv(
+            "call-started",
+            { pid: pid, playback_handle: handle || "" },
+            { app_id: appId || app, label: app },
+            title));
     }
 
     function reportCallEnded(pid) {

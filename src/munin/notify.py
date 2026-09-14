@@ -28,6 +28,8 @@ __all__ = [
     "detected",
     "ending_soon",
     "auto_stopped",
+    "track_failed",
+    "capture_widened",
     "replace_id_for",
     "format_clock",
     "build_argv",
@@ -117,6 +119,46 @@ def auto_stopped(
         body=body,
         action=("munin", "start", "--resume"),
         urgency="critical" if failed else "normal",
+        timeout_ms=30000,
+        replaces_id=replace_id_for(session_id),
+    )
+
+
+def track_failed(
+    kind: str, detail: str, *, session_id: str | None = None
+) -> Notification:
+    """A capture track died mid-meeting. Primary action: ``munin stop``.
+
+    Only reachable for the app track: a dead microphone ends the session, and
+    :func:`auto_stopped` says so. Sent once per track per session, because the
+    condition does not clear -- a dead process stays dead until the next segment.
+    """
+    return Notification(
+        title="A recording track stopped",
+        body=f"The {kind} track died ({detail}). The rest is still being captured.",
+        action=("munin", "stop"),
+        urgency="critical",
+        timeout_ms=30000,
+        replaces_id=replace_id_for(session_id),
+    )
+
+
+def capture_widened(app_label: str, *, session_id: str | None = None) -> Notification:
+    """The app's own stream could not be bound, so the desktop mix is being taken.
+
+    Compliance-relevant, not cosmetic (spec 12): a sink-monitor track holds
+    every other application's audio too -- people who were never in the meeting
+    and saw no prompt. ``session.json`` records it as ``app_source`` after the
+    fact; the user has to be told while it is happening, so they can stop.
+    """
+    return Notification(
+        title="Recording the whole desktop",
+        body=(
+            f"{app_label}'s own audio stream could not be bound, so the meeting "
+            "track holds everything this machine plays."
+        ),
+        action=("munin", "stop"),
+        urgency="critical",
         timeout_ms=30000,
         replaces_id=replace_id_for(session_id),
     )

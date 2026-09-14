@@ -12,7 +12,7 @@ import json
 
 import pytest
 
-from munin.daemon import RUNTIME_STATES
+from munin.daemon import RUNTIME_STATES, _rule_rows
 from munin.ipc import IpcError
 
 from .conftest import Harness
@@ -246,8 +246,10 @@ def test_a_capture_that_never_starts_fails_the_session(harness: Harness, monkeyp
     assert on_disk["state"] == "failed"
     assert on_disk["error"]["code"] == "capture_failed"
     assert _valid_state_file(harness)["state"] == "failed"
-    # The audio device is released and the machine may sleep again.
-    assert harness.idle_calls[-1] == ["omarchy-toggle-idle", "allow-idle"]
+    # Capture never came up, so stay-awake was never taken -- and what was never
+    # taken is never released. A daemon that called `allow-idle` here would
+    # switch off a hold the user had set by hand.
+    assert harness.idle_calls == []
 
 
 def test_a_full_disk_refuses_to_start(harness: Harness) -> None:
@@ -297,8 +299,36 @@ def test_ping_and_status_shapes(harness: Harness) -> None:
     status = harness.daemon.handle_status({})
     for key in ("schema_version", "state", "since", "started_at", "title", "session",
                 "session_id", "segment", "detected_app", "grace_deadline", "queue_depth",
-                "last_error", "idle_was_inhibited", "updated_at", "daemon_pid"):
+                "last_error", "idle_was_inhibited", "detection_rules", "updated_at",
+                "daemon_pid"):
         assert key in status
+
+
+def test_state_json_publishes_the_detection_table(harness: Harness) -> None:
+    """D13: another meeting application is a row in config.toml, never code.
+
+    The plugin is the default detection source and cannot read config.toml, so
+    a rule the user adds reaches it only if the daemon publishes the table.
+    """
+    from dataclasses import replace
+
+    from munin.detect.base import AppRule
+
+    daemon = harness.daemon
+    daemon.config = replace(
+        daemon.config,
+        detection=replace(
+            daemon.config.detection,
+            apps=(AppRule("beacon-native", "Beacon 365", client_name="Beacon"),),
+        ),
+    )
+    daemon.state.detection_rules = _rule_rows(daemon.config)
+    daemon._write_state()
+
+    rules = _valid_state_file(harness)["detection_rules"]
+    assert rules == [
+        {"app_id": "beacon-native", "label": "Beacon 365", "client_name": "Beacon"}
+    ], "empty fields are dropped; a null is not a constraint"
 
 
 def test_an_unknown_event_is_a_bad_request(harness: Harness) -> None:
@@ -364,3 +394,203 @@ def test_an_auto_stop_that_fails_does_not_take_the_daemon_down(harness: Harness)
     assert harness.session_json(started["session_id"])["state"] == "failed"
     assert harness.titles()[-1] == "Recording stopped"
     assert harness.notifications[-1].urgency == "critical"
+
+
+# ---------------------------------------------------------------------------
+# The playback handle is only as good as the call behind it. Reusing one for a
+# call that has ended makes pw-record fall back to the desktop-sink monitor,
+# which records every other application too (contracts 3, `app_source`).
+# ---------------------------------------------------------------------------
+
+
+def _app_target(harness: Harness):
+    made = harness.daemon.capturer_factory.made  # type: ignore[attr-defined]
+    return made[-1].app
+
+
+def test_a_finished_call_takes_its_handle_with_it(harness: Harness) -> None:
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    assert _app_target(harness).handle == "9911"
+
+    clock.advance(60)
+    daemon.handle_stop({})  # the user presses the keybind: auto=False
+    daemon.handle_event({"event": "call-ended", "pid": 4242})  # the call then ends
+
+    clock.advance(3600)
+    daemon.handle_start({"title": "Something else entirely"})
+    assert _app_target(harness) is None, (
+        "a dead handle would bind the next recording to the whole desktop mix"
+    )
+    assert daemon.state.detected_app is None
+
+
+def test_a_manual_stop_during_a_live_call_keeps_the_handle(harness: Harness) -> None:
+    """The call is still up, so a resume must rebind the same stream."""
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    clock.advance(60)
+    daemon.handle_stop({})
+
+    clock.advance(10)
+    resumed = daemon.handle_start({"resume": True})
+    assert resumed["resumed"] is True
+    assert _app_target(harness).handle == "9911"
+
+
+def test_an_auto_stop_takes_the_handle_with_it(harness: Harness) -> None:
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    clock.advance(30)
+    daemon.handle_event({"event": "call-ended", "pid": 4242})
+    clock.advance(daemon.config.detection.grace_seconds + 1)
+    daemon.tick()
+
+    assert daemon.state.state == "captured"
+    assert daemon._playback_handle is None
+
+
+# ---------------------------------------------------------------------------
+# Racing the worker for a session (D15).
+# ---------------------------------------------------------------------------
+
+
+def test_a_resume_that_loses_the_race_opens_a_fresh_session(harness: Harness) -> None:
+    """The worker claimed the session between resumable() and the transition."""
+    daemon, clock = harness.daemon, harness.clock
+    first = daemon.handle_start({"title": "Weekly quality sync"})
+    clock.advance(30)
+    daemon.handle_stop({})
+
+    # munin-work gets there first: captured -> pending is its transition, and
+    # the daemon's captured -> recording is then illegal.
+    session = harness.spool.load(first["session_id"])
+    session.transition("pending", by="munin-work")
+    session.transition("transcribing", by="munin-work")
+
+    clock.advance(10)
+    started = daemon.handle_start({"title": "Weekly quality sync"})
+    assert started["resumed"] is False
+    assert started["session_id"] != first["session_id"]
+    assert daemon.state.state == "recording"
+    assert harness.session_json(first["session_id"])["state"] == "transcribing"
+
+
+# ---------------------------------------------------------------------------
+# Idle inhibit: release only what this process took (contracts 12).
+# ---------------------------------------------------------------------------
+
+
+def test_a_daemon_that_never_recorded_leaves_stay_awake_alone(harness: Harness) -> None:
+    """The user set stay-awake by hand; `systemctl --user restart` must not undo it."""
+    harness.daemon.shutdown()
+    assert harness.idle_calls == []
+
+
+def test_stopping_a_recording_still_releases_the_hold(harness: Harness) -> None:
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_start({"title": "Weekly quality sync"})
+    assert harness.idle_calls == [["omarchy-toggle-idle", "stay-awake"]]
+    clock.advance(30)
+    daemon.handle_stop({})
+    assert harness.idle_calls[-1] == ["omarchy-toggle-idle", "allow-idle"]
+
+    harness.idle_calls.clear()
+    daemon.shutdown()
+    assert harness.idle_calls == [], "the hold is already released; do not release it twice"
+
+
+# ---------------------------------------------------------------------------
+# Capture health: a track that dies mid-meeting (spec 11, D14).
+# ---------------------------------------------------------------------------
+
+
+def test_a_dead_microphone_track_ends_the_recording(harness: Harness) -> None:
+    """ffmpeg writes nothing until it closes the file, so waiting for stop loses the hour."""
+    daemon, clock = harness.daemon, harness.clock
+    started = daemon.handle_start({"title": "Weekly quality sync"})
+    clock.advance(300)
+    daemon.capturer.dead_tracks = ["mic"]  # type: ignore[union-attr]
+
+    daemon.tick()
+
+    assert daemon.state.state == "captured"
+    assert harness.session_json(started["session_id"])["state"] == "captured"
+    assert harness.titles()[-1] == "Recording stopped", "D14: never stop silently"
+
+
+def test_a_dead_app_track_is_reported_once_and_keeps_the_microphone(
+    harness: Harness,
+) -> None:
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_start({"title": "Weekly quality sync"})
+    clock.advance(60)
+    daemon.capturer.dead_tracks = ["app"]  # type: ignore[union-attr]
+
+    daemon.tick()
+    assert daemon.state.state == "recording"
+    assert harness.titles()[-1] == "A recording track stopped"
+    assert _valid_state_file(harness)["last_error"]
+
+    clock.advance(600)
+    daemon.tick()
+    assert harness.titles().count("A recording track stopped") == 1, (
+        "a dead process stays dead; do not notify on every tick"
+    )
+
+
+def test_health_is_not_polled_more_often_than_it_can_change(harness: Harness) -> None:
+    from munin.daemon import HEALTH_POLL_SECONDS
+
+    daemon, clock = harness.daemon, harness.clock
+    daemon.handle_start({"title": "Weekly quality sync"})
+    daemon.tick()  # the first tick of a recording always looks
+    daemon.capturer.dead_tracks = ["app"]  # type: ignore[union-attr]
+
+    clock.advance(HEALTH_POLL_SECONDS - 1)
+    daemon.tick()
+    assert harness.titles() == []
+
+    clock.advance(2)
+    daemon.tick()
+    assert harness.titles() == ["A recording track stopped"]
+
+
+def test_a_widened_app_capture_says_so_while_it_is_happening(harness: Harness) -> None:
+    """spec 12: the desktop mix holds people who were never in the meeting."""
+    from .fakes import FakeCapturer
+
+    daemon = harness.daemon
+
+    def widened(mic, app):
+        capturer = FakeCapturer(mic, app, clock=harness.clock)
+        capturer.app_source = "sink-monitor"
+        return capturer
+
+    daemon.capturer_factory = widened  # type: ignore[assignment]
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+
+    assert harness.titles()[-1] == "Recording the whole desktop"
+    assert harness.notifications[-1].urgency == "critical"
+    assert daemon.state.state == "recording", "a warning is not a failure"
+
+
+def test_an_isolated_stream_says_nothing(harness: Harness) -> None:
+    daemon = harness.daemon
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    assert "Recording the whole desktop" not in harness.titles()

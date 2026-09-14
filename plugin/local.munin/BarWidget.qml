@@ -116,6 +116,19 @@ Panel {
         root.close();
     }
 
+    // The action that cannot live on a notification: the wrapper takes one
+    // --exec and the "streams gone" notification spends it on Stop (contracts
+    // 8), so the panel and the keybind are the only places *Keep recording*
+    // can be offered -- and without it a Teams reconnect during the grace
+    // period auto-stops the meeting with no way for the user to say otherwise.
+    readonly property var secondary: Model.secondaryAction(root.barState)
+
+    function runSecondary() {
+        if (!root.secondary) return;
+        root.run(root.secondary.argv);
+        root.close();
+    }
+
     // --- bar-facing shape ----------------------------------------------
 
     visible: Model.visible(barState)
@@ -306,6 +319,8 @@ Panel {
             onTextKey: function (t) {
                 if (t === "r" || t === "R") root.refreshSessions();
                 else if (t === "o" || t === "O") root.openPath(root.muninHome);
+                // k: keep recording, while the grace period is counting down.
+                else if (t === "k" || t === "K") root.runSecondary();
             }
 
             Flickable {
@@ -447,6 +462,14 @@ Panel {
                             value: String(root.status.segment)
                         }
                         InfoPair {
+                            // How long is left before the grace period stops
+                            // this recording by itself. Without it "Keep
+                            // recording" is a button with no deadline on it.
+                            visible: root.graceClock !== ""
+                            label: "Stops at"
+                            value: root.graceClock
+                        }
+                        InfoPair {
                             visible: root.status.last_error !== null
                             label: "Error"
                             value: String(root.status.last_error || "")
@@ -466,6 +489,15 @@ Panel {
                             foreground: root.counting ? root.urgent : root.foreground
                             fontFamily: root.fontFamily
                             onClicked: root.runPrimary()
+                        }
+
+                        Button {
+                            visible: root.secondary !== null
+                            text: root.secondary ? root.secondary.label : ""
+                            bordered: true
+                            foreground: root.foreground
+                            fontFamily: root.fontFamily
+                            onClicked: root.runSecondary()
                         }
 
                         Button {
@@ -601,6 +633,10 @@ Panel {
     }
 
     readonly property string startedClock: Model.formatClock(root.status.started_at)
+
+    // Only set while the grace period runs (contracts 7.2).
+    readonly property string graceClock: root.barState === "ending"
+        ? Model.formatClock(root.status.grace_deadline) : ""
 
     readonly property string sourceLabel: root.status.detected_app
         && root.status.detected_app.label
