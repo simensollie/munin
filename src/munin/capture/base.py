@@ -33,6 +33,17 @@ class CaptureError(RuntimeError):
     """Capture could not start, or produced nothing usable."""
 
 
+#: ``CaptureTarget.handle`` value asking for the machine's whole output mix
+#: rather than one application's stream -- spec 16.2's "fallback" row on every
+#: platform (PipeWire sink monitor, BlackHole aggregate, WASAPI loopback). The
+#: daemon uses it for an ad-hoc ``munin start`` when no call was detected, so a
+#: keybind pressed during a meeting still records the other participants. A
+#: platform capturer reports it as ``app_source`` other than ``"stream"`` and
+#: the daemon tells the user, because that mix may hold audio from people who
+#: were never in the meeting (spec 12).
+SYSTEM_OUTPUT_HANDLE = "system-output"
+
+
 @dataclass(frozen=True)
 class CaptureTarget:
     """One end of a capture: a microphone, or one application's audio stream.

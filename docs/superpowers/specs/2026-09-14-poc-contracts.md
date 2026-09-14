@@ -568,6 +568,7 @@ which is what "offered alongside rather than instead" already promised.
 | Auto-stopped | `critical` on failure, else `normal` | "Recording stopped" / "*n* min captured, queued for transcription" | `munin start --resume` | Panel: *Open session*. |
 | A capture track died mid-meeting | `critical` | "A recording track stopped" / which track, and that the rest is still being captured | `munin stop` | — (once per track per session; a dead microphone ends the session instead and notifies as *Auto-stopped*). |
 | The app stream could not be bound | `critical` | "Recording the whole desktop" / the application's own audio could not be bound, so the meeting track holds everything this machine plays | `munin stop` | — (spec §12: a sink-monitor track holds people who were never in the meeting, and telling the user afterwards through `app_source` is too late to stop it). |
+| Ad-hoc start with no call to bind | `normal`, `-t 15000` | "Recording everything this machine plays" / no meeting call was found, so the meeting track holds the whole output mix | `munin stop` | — (§16.5: asked for by `[capture] adhoc_app_source`, not a fallback, but the same §12 point applies). |
 
 D14 holds: auto-stop **always** notifies. `-r <id>` is used to replace the
 previous Munin notification rather than stacking, with a stable id per session.
@@ -1009,3 +1010,38 @@ place and this table says which.
 | 20 | Step 4 was fatal while steps 3 and 6 only warned, so an install started **without a reachable Omarchy shell** (ssh, a bare TTY, a first boot) aborted with the venv and plugin in place but no keybind, no unit and no data root. | Step 4 warns, prints the command to run once the shell is up, and steps 5-7 complete. |
 
 None of D1-D21 was reopened, and no frozen file was edited.
+
+### 16.5 Live run, and the ad-hoc app track
+
+The merged PoC was run end to end on this machine from the repository venv
+against a scratch data root (no install): `munin-rec` on its real socket, then
+`munin start`, `status --json`, `stop`, `munin-work --once`, `start --resume`,
+`event call-started` / `call-ended`, `toggle`, and a `SIGTERM` to the daemon
+mid-recording. Everything behaved as §4, §7 and §11 say. One gap showed up that
+no test could have: **an ad-hoc `munin start` recorded a silent app track**
+(`app_source: "silent"`, RMS −∞ dB), because §5 mapped "no `CaptureTarget` for
+the app" to silence and an ad-hoc start has no detected call to hand over. That
+is the keybind-during-a-Teams-tab case, which is the PoC's main use, so it was
+changed rather than documented:
+
+1. `handle_start` on an ad-hoc start runs **one detector scan** first. An
+   identified call is adopted (its stream is bound, its identity goes into
+   `session.json.app`, `source` stays `adhoc`); failing that, a *single*
+   unidentified live call is adopted; two or more is ambiguous and none is.
+2. With nothing to adopt, the app target is the new platform-neutral
+   `CaptureTarget(handle=SYSTEM_OUTPUT_HANDLE)` from `capture/base.py` — spec
+   §16.2's "fallback" row on every platform. On Linux that is the sink monitor
+   from the outset (no stream lookup, no probe, no warning). `session.json`
+   records `app_source: "sink-monitor"`, and the daemon notifies (§8) because
+   the mix may hold audio from outside the meeting (spec §12).
+3. `[capture] adhoc_app_source = "system-output" | "silent"` (§9) keeps the old
+   behaviour available.
+
+Measured after the change, tone playing through `pw-play` and a quiet room:
+app track −21.1 dB RMS, mic track −57.1 dB RMS, both ~8.7 s for an 8 s
+recording; before it the app track was −∞ dB. Counterargument recorded: the
+output mix is exactly the material D2 wanted to keep out of the meeting track
+(music, notification sounds), and adopting a single unidentified call trusts
+condition 1 alone. Accepted because a meeting track with nothing on it cannot
+be repaired afterwards, the session says which kind of track it holds, and the
+user is told while they can still stop.

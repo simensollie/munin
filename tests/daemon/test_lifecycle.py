@@ -422,8 +422,12 @@ def test_a_finished_call_takes_its_handle_with_it(harness: Harness) -> None:
 
     clock.advance(3600)
     daemon.handle_start({"title": "Something else entirely"})
-    assert _app_target(harness) is None, (
-        "a dead handle would bind the next recording to the whole desktop mix"
+    from munin.capture.base import SYSTEM_OUTPUT_HANDLE
+
+    target = _app_target(harness)
+    assert target is None or target.handle == SYSTEM_OUTPUT_HANDLE, (
+        "a dead handle must never be reused; an ad-hoc start may only take the "
+        "deliberate output-mix target, which is announced"
     )
     assert daemon.state.detected_app is None
 
@@ -558,11 +562,11 @@ def test_health_is_not_polled_more_often_than_it_can_change(harness: Harness) ->
 
     clock.advance(HEALTH_POLL_SECONDS - 1)
     daemon.tick()
-    assert harness.titles() == []
+    assert "A recording track stopped" not in harness.titles()
 
     clock.advance(2)
     daemon.tick()
-    assert harness.titles() == ["A recording track stopped"]
+    assert harness.titles().count("A recording track stopped") == 1
 
 
 def test_a_widened_app_capture_says_so_while_it_is_happening(harness: Harness) -> None:

@@ -164,6 +164,27 @@ def capture_widened(app_label: str, *, session_id: str | None = None) -> Notific
     )
 
 
+def recording_system_output(*, session_id: str | None = None) -> Notification:
+    """An ad-hoc start found no call to bind, so the whole output mix is taken.
+
+    Deliberate rather than a failure (``[capture] adhoc_app_source``), but the
+    same compliance point as :func:`capture_widened` applies: whatever else this
+    machine plays is on the meeting track, so the user is told while they can
+    still stop.
+    """
+    return Notification(
+        title="Recording everything this machine plays",
+        body=(
+            "No meeting call was found to bind to, so the meeting track holds "
+            "the whole output mix. Stop if that is not what you want."
+        ),
+        action=("munin", "stop"),
+        urgency="normal",
+        timeout_ms=15000,
+        replaces_id=replace_id_for(session_id),
+    )
+
+
 def build_argv(notification: Notification, *, glyph: str = GLYPH) -> list[str]:
     """The exact command line, in the order the wrapper accepts.
 

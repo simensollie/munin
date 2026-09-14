@@ -55,6 +55,7 @@ from pathlib import Path
 from typing import IO, Any, ClassVar, Literal, Sequence
 
 from munin.capture.base import (
+    SYSTEM_OUTPUT_HANDLE,
     CaptureError,
     CaptureResult,
     CaptureTarget,
@@ -84,6 +85,20 @@ DEFAULT_HANDLE = "default"
 
 #: Where the app track's audio actually came from, once capture has started.
 AppSource = Literal["stream", "sink-monitor", "silent"]
+
+
+def initial_app_source(app: CaptureTarget | None) -> AppSource:
+    """What the app track will be before anything has been probed.
+
+    No target means silence; :data:`SYSTEM_OUTPUT_HANDLE` asks for the sink
+    monitor outright (so no stream lookup is attempted and none can fail);
+    anything else names one application's stream.
+    """
+    if app is None:
+        return "silent"
+    if app.handle == SYSTEM_OUTPUT_HANDLE:
+        return "sink-monitor"
+    return "stream"
 
 #: A bare Ogg-Opus header pair is about 150 bytes; anything smaller than this
 #: carries no audio at all and is not worth calling playable.
@@ -575,7 +590,7 @@ class PipewireCapturer(Capturer):
         self._segment_index: int | None = None
         self._started_at: datetime | None = None
         #: Where the app track's audio came from once started (contracts 5).
-        self.app_source: AppSource = "silent" if app is None else "stream"
+        self.app_source: AppSource = initial_app_source(app)
         #: Non-fatal things the daemon should surface: a fallback, a dead track.
         self.warnings: list[str] = []
 
@@ -598,14 +613,14 @@ class PipewireCapturer(Capturer):
 
         self._tracks = {}
         self.warnings = []
-        self.app_source = "silent" if self.app is None else "stream"
+        self.app_source = initial_app_source(self.app)
 
         # Pre-flight, and the reason it exists: pw-record does not fail when
         # --target names a node that is not there. It records the default
         # source instead -- which would fill the app track with the
         # microphone. Measured on this machine; there is no pw-record flag
         # that changes it. So the only safe binding is one we looked up first.
-        if self.app is not None and not self._app_stream_bindable():
+        if self.app_source == "stream" and not self._app_stream_bindable():
             self.warnings.append(
                 f"{self.app.label} stream {self.app.handle} is gone; "
                 "falling back to the sink monitor"

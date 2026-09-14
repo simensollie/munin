@@ -701,3 +701,29 @@ def test_default_mic_target_needs_a_runtime_dir(monkeypatch):
     monkeypatch.setenv("XDG_RUNTIME_DIR", "")
     with pytest.raises(CaptureError, match="XDG_RUNTIME_DIR"):
         default_mic_target()
+
+
+def test_the_system_output_handle_records_the_sink_monitor_outright(
+    tools, runtime, fast_probe, session
+):
+    """An ad-hoc start with no call asks for the mix; no stream is looked up or probed."""
+    from munin.capture.base import SYSTEM_OUTPUT_HANDLE
+
+    spawn = SpawnRecorder()
+    target = CaptureTarget(kind="app", handle=SYSTEM_OUTPUT_HANDLE, label="system output")
+    capturer = make_capturer(spawn, app=target)
+    assert capturer.app_source == "sink-monitor"
+    capturer.start(session, 1)
+    try:
+        assert capturer.app_source == "sink-monitor"
+        recorders = spawn.commands("pw-record")
+        assert len(recorders) == 2
+        app_argv = recorders[1]
+        assert "--target" not in app_argv
+        assert "stream.capture.sink = true" in app_argv[app_argv.index("-P") + 1]
+        assert capturer.app_stream_present() is None, "no single stream to watch"
+        assert capturer.describe()["app_source"] == "sink-monitor"
+        assert capturer.warnings == [], "asked for, so not a fallback"
+    finally:
+        result = capturer.stop()
+    assert result.app_path.exists()

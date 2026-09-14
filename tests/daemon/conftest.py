@@ -21,6 +21,16 @@ from munin.notify import Notification
 from .fakes import FakeClock, FakeSpool, recording_capturer_factory
 
 
+class QuietDetector:
+    """A detector that never sees a call, so no test shells out to pw-dump."""
+
+    def scan(self, *, now: Any = None) -> list[Any]:
+        return []
+
+    def describe(self) -> dict[str, str]:
+        return {"platform": "fake"}
+
+
 @dataclass
 class Harness:
     daemon: Daemon
@@ -82,6 +92,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
         notifier=notifier,
         clock=clock,
         idle_runner=idle_runner,
+        detector=QuietDetector(),
         socket_path_override=run / "munin" / "rec.sock",
         state_path_override=state_path,
     )

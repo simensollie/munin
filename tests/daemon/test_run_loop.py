@@ -354,3 +354,121 @@ def test_the_unit_signals_only_the_daemon_on_stop() -> None:
         "daemon, and the Ogg trailer is written by the ordering munin-rec runs"
     )
     assert "TimeoutStopSec=" in body
+
+
+# ---------------------------------------------------------------------------
+# An ad-hoc start is usually the keybind pressed during a call nobody told the
+# daemon about. It must look once, bind the call it finds, and never leave the
+# meeting track silent by default.
+# ---------------------------------------------------------------------------
+
+
+def _unidentified_call(pid: int, handle: str) -> DetectedCall:
+    return DetectedCall(
+        evidence=CallEvidence(
+            pid=pid, has_playback=True, has_capture=True,
+            playback_handle=handle, client_name="Some WebRTC app",
+        ),
+        identity=None,
+        window=None,
+        observed_at=datetime(2026, 9, 14, 13, 25).astimezone(),
+    )
+
+
+def test_an_adhoc_start_binds_the_live_call_it_finds(harness: Harness) -> None:
+    daemon = harness.daemon
+    daemon._detector = ScriptedDetector([[_call(4242)]])
+
+    started = daemon.handle_start({"title": "Weekly quality sync"})
+
+    capturer = daemon.capturer
+    assert capturer is not None and capturer.app is not None
+    assert capturer.app.handle == "57", "the app track is the call's own stream"
+    assert capturer.app.app_id == "beacon-tab"
+    session = harness.session_json(started["session_id"])
+    assert session["source"] == "adhoc", "the user started it, not a detection"
+    assert session["app"]["app_id"] == "beacon-tab"
+    assert session["app"]["pid"] == 4242
+    assert harness.state_json()["detected_app"]["pid"] == 4242
+    assert "Recording everything this machine plays" not in harness.titles()
+
+
+def test_an_adhoc_start_adopts_a_single_unidentified_call(harness: Harness) -> None:
+    daemon = harness.daemon
+    daemon._detector = ScriptedDetector([[_unidentified_call(77, "901")]])
+
+    started = daemon.handle_start({"title": "Ad hoc"})
+
+    assert daemon.capturer.app.handle == "901"
+    assert harness.session_json(started["session_id"])["app"]["app_id"] == "unknown"
+
+
+def test_two_unidentified_calls_are_ambiguous_so_the_output_mix_is_taken(
+    harness: Harness,
+) -> None:
+    from munin.capture.base import SYSTEM_OUTPUT_HANDLE
+
+    daemon = harness.daemon
+    daemon._detector = ScriptedDetector(
+        [[_unidentified_call(1, "10"), _unidentified_call(2, "20")]]
+    )
+    daemon.handle_start({"title": "Ad hoc"})
+    assert daemon.capturer.app.handle == SYSTEM_OUTPUT_HANDLE
+
+
+def test_an_adhoc_start_with_no_call_records_the_output_mix_and_says_so(
+    harness: Harness,
+) -> None:
+    from munin.capture.base import SYSTEM_OUTPUT_HANDLE
+
+    daemon = harness.daemon
+    started = daemon.handle_start({"title": "Ad hoc"})
+
+    capturer = daemon.capturer
+    assert capturer.app is not None
+    assert capturer.app.handle == SYSTEM_OUTPUT_HANDLE
+    assert "Recording everything this machine plays" in harness.titles()
+    assert harness.state_json()["last_error"] is None, "asked for, not a failure"
+    assert harness.session_json(started["session_id"])["app"] is None
+
+
+def test_adhoc_app_source_silent_keeps_the_old_behaviour(harness: Harness) -> None:
+    from dataclasses import replace
+
+    daemon = harness.daemon
+    daemon.config = replace(
+        daemon.config, capture=replace(daemon.config.capture, adhoc_app_source="silent")
+    )
+    daemon.handle_start({"title": "Ad hoc"})
+    assert daemon.capturer.app is None
+    assert "Recording everything this machine plays" not in harness.titles()
+
+
+def test_a_broken_detector_never_blocks_an_adhoc_start(harness: Harness) -> None:
+    from munin.capture.base import SYSTEM_OUTPUT_HANDLE
+
+    class BrokenDetector:
+        def scan(self, *, now=None):
+            raise RuntimeError("pw-dump exploded")
+
+        def describe(self):
+            return {"platform": "fake"}
+
+    daemon = harness.daemon
+    daemon._detector = BrokenDetector()
+    daemon.handle_start({"title": "Ad hoc"})
+    assert daemon.state.state == "recording"
+    assert daemon.capturer.app.handle == SYSTEM_OUTPUT_HANDLE
+
+
+def test_a_call_adopted_at_start_can_be_ended_by_the_plugin(harness: Harness) -> None:
+    """The adopted call is a real detection: its call-ended starts the grace period."""
+    daemon, clock = harness.daemon, harness.clock
+    daemon._detector = ScriptedDetector([[_call(4242)]])
+    daemon.handle_start({"title": "Weekly quality sync"})
+
+    assert daemon.on_call_ended(pid=4242) is True
+    assert daemon.state.state == "ending"
+    clock.advance(daemon.config.detection.grace_seconds + 1)
+    daemon.tick()
+    assert daemon.state.state != "recording"

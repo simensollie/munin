@@ -93,6 +93,11 @@ sample_rate  = 48000
 # Refuse to start a recording below this much free space rather than truncating
 # one halfway through (spec 11).
 min_free_mb  = 2048
+# `munin start` (or the keybind) with no detected call first looks for a live
+# call to bind to. If there is none: "system-output" records everything this
+# machine plays as the meeting track (and says so in a notification, since that
+# can include audio from outside the meeting); "silent" records only you.
+adhoc_app_source = "system-output"
 
 [detection]
 enabled = true
@@ -156,6 +161,9 @@ class CaptureConfig:
     channels: int = 1
     sample_rate: int = 48000
     min_free_mb: int = 2048
+    # What the app track holds for an ad-hoc start when no call was detected:
+    # "system-output" (the machine's whole output mix) or "silent".
+    adhoc_app_source: str = "system-output"
 
 
 @dataclass(frozen=True)
@@ -236,6 +244,7 @@ _SCALAR_FIELDS: dict[str, dict[str, type]] = {
         "channels": int,
         "sample_rate": int,
         "min_free_mb": int,
+        "adhoc_app_source": str,
     },
     "detection": {
         "enabled": bool,
@@ -251,6 +260,10 @@ _SCALAR_FIELDS: dict[str, dict[str, type]] = {
 }
 
 _DETECTION_SOURCES = ("plugin", "daemon", "off")
+
+# For an ad-hoc `munin start` with no detected call: record the whole output
+# mix, or leave the app track silent.
+_ADHOC_APP_SOURCES = ("system-output", "silent")
 
 _APP_RULE_KEYS = (
     "app_id",
@@ -436,6 +449,12 @@ def load(path: Path | None = None) -> Config:
             raise ConfigError(f"[capture] {name} must be positive, got {value}")
     if capture.min_free_mb < 0:
         raise ConfigError("[capture] min_free_mb must not be negative")
+    if capture.adhoc_app_source not in _ADHOC_APP_SOURCES:
+        raise ConfigError(
+            "[capture] adhoc_app_source must be one of "
+            + ", ".join(_ADHOC_APP_SOURCES)
+            + f", got {capture.adhoc_app_source!r}"
+        )
 
     return Config(
         home=home,

@@ -22,6 +22,8 @@ macOS and Windows are designed for but not built.
 
 Frozen contracts for the PoC: [`docs/superpowers/specs/2026-09-14-poc-contracts.md`](docs/superpowers/specs/2026-09-14-poc-contracts.md)
 (§16 records what the integration merge reconciled, and what is still open).
+PoC status, what was verified live and how to install:
+[`docs/superpowers/plans/2026-09-14-poc-status.md`](docs/superpowers/plans/2026-09-14-poc-status.md).
 
 > This is a public copy of an internal design document. Customer names,
 > colleague names and internal project references have been replaced with

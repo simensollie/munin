@@ -38,6 +38,7 @@ from typing import Any, Callable, Sequence
 
 from munin import notify
 from munin.capture.base import (
+    SYSTEM_OUTPUT_HANDLE,
     CaptureError,
     CaptureResult,
     CaptureTarget,
@@ -400,8 +401,16 @@ class Daemon:
                     exc,
                 )
                 session = None
+        # An ad-hoc start is usually the keybind pressed *during* a call the
+        # daemon was never told about. Look once before binding anything, so
+        # the app track is the meeting rather than silence or the whole mix.
+        adopted = False
+        if not from_detection and self._detected is None:
+            adopted = self._adopt_live_call(now)
         if session is None:
-            session = self._create(title=title, from_detection=from_detection, now=now)
+            session = self._create(
+                title=title, from_detection=from_detection, adopted=adopted, now=now
+            )
 
         self.session = session
         self._segment_index = len(getattr(session, "segments", []) or []) + 1
@@ -909,10 +918,75 @@ class Daemon:
                 pid=detected.get("pid"),
                 app_id=detected.get("app_id"),
             )
+        elif self.config.capture.adhoc_app_source == "system-output":
+            # No call to bind to. Record the whole output mix rather than
+            # silence: the user pressed record, and a meeting track with
+            # nothing on it is the one outcome that cannot be repaired later.
+            app = CaptureTarget(kind="app", handle=SYSTEM_OUTPUT_HANDLE, label="system output")
         return mic, app
 
-    def _create(self, *, title: str | None, from_detection: bool, now: datetime) -> Any:
-        detected = self._detected if from_detection else None
+    def _adopt_live_call(self, now: datetime) -> bool:
+        """One detector scan for an ad-hoc start; adopt a live call if there is one.
+
+        An identified call wins; failing that, a *single* unidentified live call
+        is taken, because the user has just said "record" and one process holding
+        both a playback and a capture stream is the only candidate. Two or more
+        unidentified calls is ambiguous and nothing is adopted. Any probe failure
+        is a warning, never a reason not to record.
+        """
+        if not self.config.detection.enabled:
+            return False
+        try:
+            calls = self.detector.scan(now=now)  # type: ignore[union-attr]
+        except Exception as exc:  # noqa: BLE001 - a broken probe must not block a recording
+            log.warning("could not look for a live call before an ad-hoc start error=%s", exc)
+            return False
+        identified = [call for call in calls if call.identity is not None]
+        unidentified = [call for call in calls if call.identity is None]
+        if identified:
+            call = identified[0]
+        elif len(unidentified) == 1:
+            call = unidentified[0]
+        else:
+            return False
+        evidence = call.evidence
+        if not evidence.playback_handle:
+            return False
+        identity = call.identity
+        window = call.window
+        self._detected = {
+            "app_id": identity.app_id if identity else "unknown",
+            "label": identity.label if identity else (evidence.client_name or "Meeting"),
+            "matched_by": identity.matched_by if identity else None,
+            "pid": evidence.pid,
+            "client_name": evidence.client_name,
+            "binary": evidence.binary,
+            "window_class": window.window_class if window else None,
+            "window_title": window.title if window else None,
+        }
+        self._playback_handle = str(evidence.playback_handle)
+        self.state.detected_app = {
+            "app_id": self._detected["app_id"],
+            "label": self._detected["label"],
+            "pid": evidence.pid,
+        }
+        log.info(
+            "ad-hoc start bound to a live call pid=%s app=%s identified=%s",
+            evidence.pid,
+            self._detected["label"],
+            identity is not None,
+        )
+        return True
+
+    def _create(
+        self,
+        *,
+        title: str | None,
+        from_detection: bool,
+        now: datetime,
+        adopted: bool = False,
+    ) -> Any:
+        detected = self._detected if (from_detection or adopted) else None
         if title is None and detected is not None:
             title = f"{detected['label']} {now.strftime('%H:%M')}"
         if title is None:
@@ -1056,6 +1130,12 @@ class Daemon:
         be able to stop while it is still happening (spec 12).
         """
         if app is None:
+            return
+        if app.handle == SYSTEM_OUTPUT_HANDLE:
+            # Asked for, not fallen back to -- but the same people-outside-the-
+            # meeting point applies, so it is still said out loud.
+            log.info("the app track is the whole output mix session=%s", self.state.session_id)
+            self.notifier(notify.recording_system_output(session_id=self.state.session_id))
             return
         source = _describe_app_source(capturer)
         if source is None or source == "stream":

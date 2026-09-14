@@ -194,6 +194,7 @@ def test_unknown_keys_are_reported_not_dropped(munin_home: Path) -> None:
         ('[detection]\nsource = "telepathy"\n', "source must be one of"),
         ("[detection]\nwarn_seconds = 300\n", "inside grace_seconds"),
         ("[capture]\nsample_rate = 0\n", "must be positive"),
+        ('[capture]\nadhoc_app_source = "everything"\n', "adhoc_app_source must be one of"),
         ('[transcribe]\nfallback = "ssh"\n', "list of backend names"),
         ("[[detection.apps]]\nlabel = \"x\"\n", "needs a app_id string"),
     ],
@@ -250,3 +251,10 @@ def test_the_template_is_commented(munin_home: Path) -> None:
     assert text.count("#") > 10
     assert "min_free_mb" in text
     assert "resume_window_seconds" in text
+
+
+def test_adhoc_app_source_defaults_to_the_output_mix(munin_home: Path) -> None:
+    write(munin_home, "")
+    assert load().capture.adhoc_app_source == "system-output"
+    write(munin_home, '[capture]\nadhoc_app_source = "silent"\n')
+    assert load().capture.adhoc_app_source == "silent"
