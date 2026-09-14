@@ -1,0 +1,1315 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Munin Bar Plugin</title>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Familjen+Grotesk:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600&family=JetBrains+Mono:wght@400;500;700&display=swap">
+<style>
+  /* ---- page chrome tokens: light (bare :root) ---- */
+  :root {
+    --paper:      #f2f1ee;
+    --paper-2:    #e7e5e0;
+    --rule:       #d2cfc7;
+    --ink:        #16181b;
+    --ink-2:      #4a4e55;
+    --ink-3:      #797f88;
+    --mark:       #a8551f;
+    --link:       #2f6b8f;
+    color-scheme: light dark;
+  }
+  :root:not([data-theme="light"]) {
+    @media (prefers-color-scheme: dark) {
+      --paper:   #0f1114;
+      --paper-2: #16191d;
+      --rule:    #2a2e35;
+      --ink:     #d7dae0;
+      --ink-2:   #9aa1ab;
+      --ink-3:   #6b7280;
+      --mark:    #d9884e;
+      --link:    #74aecd;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:   #0f1114;
+    --paper-2: #16191d;
+    --rule:    #2a2e35;
+    --ink:     #d7dae0;
+    --ink-2:   #9aa1ab;
+    --ink-3:   #6b7280;
+    --mark:    #d9884e;
+    --link:    #74aecd;
+  }
+
+  /* ---- shell tokens: FIXED in both themes. These mockups depict a dark
+         desktop shell, so they keep their own colours like artwork would.
+         Values follow Omarchy 4's real Style.qml: cornerRadius 0,
+         border alpha 0.4, fill alphas 0.04 / 0.08 / 0.18. ---- */
+  .shell, .admin, .term {
+    --sh-bg:     #0b0d10;
+    --sh-bar:    #14171c;
+    --sh-panel:  #181c22;
+    --sh-fg:     #ccd1d9;
+    --sh-dim:    #707885;
+    --sh-line:   rgba(204,209,217,0.22);
+    --sh-line-s: rgba(204,209,217,0.40);
+    --sh-fill:   rgba(204,209,217,0.04);
+    --sh-hover:  rgba(204,209,217,0.08);
+    --sh-sel:    rgba(204,209,217,0.18);
+    --sh-rec:    #e5484d;
+    --sh-armed:  #d9a441;
+    --sh-ok:     #5eaa8a;
+    --sh-work:   #6ea8d8;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: "IBM Plex Sans", ui-sans-serif, system-ui, sans-serif;
+    font-size: 15px;
+    line-height: 1.6;
+    margin: 0;
+  }
+
+  .wrap {
+    max-width: 960px;
+    margin: 0 auto;
+    padding-inline: 24px;
+    padding-block: 56px 96px;
+  }
+
+  h1, h2, h3 {
+    font-family: "Familjen Grotesk", "Familjen Grotesk Fallback", sans-serif;
+    text-wrap: balance;
+    margin: 0;
+  }
+
+  /* ---- masthead ---- */
+  .mast { display: grid; gap: 14px; padding-bottom: 28px; border-bottom: 2px solid var(--ink); }
+  .kicker {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 11px; letter-spacing: 0.16em; text-transform: uppercase;
+    color: var(--mark);
+  }
+  h1 { font-size: clamp(38px, 7vw, 62px); font-weight: 700; letter-spacing: -0.025em; line-height: 1.02; }
+  .standfirst { font-size: 18px; color: var(--ink-2); max-width: 60ch; margin: 0; }
+  .mast-meta {
+    display: flex; flex-wrap: wrap; gap: 8px 22px;
+    font-family: "JetBrains Mono", monospace; font-size: 11.5px; color: var(--ink-3);
+  }
+
+  /* ---- sections ---- */
+  section { padding-block: 52px; border-bottom: 1px solid var(--rule); }
+  section:last-of-type { border-bottom: 0; }
+  .sec-head { display: grid; gap: 8px; margin-bottom: 26px; }
+  .sec-no {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    letter-spacing: 0.16em; text-transform: uppercase; color: var(--ink-3);
+  }
+  h2 { font-size: clamp(25px, 4vw, 33px); font-weight: 600; letter-spacing: -0.015em; }
+  .lede { color: var(--ink-2); max-width: 62ch; margin: 0; }
+  h3 { font-size: 17px; font-weight: 600; margin-bottom: 6px; }
+  p { margin: 0 0 14px; max-width: 64ch; }
+  section p:last-child { margin-bottom: 0; }
+
+  code {
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 0.86em;
+    background: var(--paper-2);
+    padding: 1px 5px;
+    border: 1px solid var(--rule);
+  }
+  a { color: var(--link); }
+
+  /* ================= SHELL MOCKUPS ================= */
+  .shell { font-family: "JetBrains Mono", ui-monospace, monospace; }
+
+  .frame {
+    background: var(--sh-bg);
+    border: 1px solid var(--sh-line-s);
+    overflow: hidden;
+  }
+
+  /* the bar itself */
+  .bar {
+    display: flex; align-items: stretch; justify-content: space-between;
+    background: var(--sh-bar);
+    border-bottom: 1px solid var(--sh-line);
+    color: var(--sh-fg);
+    font-size: 12px;
+    min-height: 30px;
+  }
+  .bar-sec { display: flex; align-items: center; gap: 2px; padding: 0 6px; }
+  .mod {
+    display: flex; align-items: center; gap: 6px;
+    padding: 5px 8px; color: var(--sh-dim); white-space: nowrap;
+  }
+  .mod.live { color: var(--sh-fg); }
+  .mod.hl { background: var(--sh-hover); color: var(--sh-fg); box-shadow: inset 0 -2px 0 var(--sh-work); }
+  .mod.rec { color: var(--sh-rec); background: rgba(229,72,77,0.10); box-shadow: inset 0 -2px 0 var(--sh-rec); }
+  .mod.armed { color: var(--sh-armed); }
+  .dot { width: 7px; height: 7px; background: currentColor; border-radius: 50%; flex: none; }
+  .dot.pulse { animation: pulse 1.8s ease-in-out infinite; }
+  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+  @media (prefers-reduced-motion: reduce) { .dot.pulse { animation: none; } }
+  .num { font-variant-numeric: tabular-nums; }
+
+  .desk { height: 62px; background: linear-gradient(160deg, #0b0d10, #121722 70%, #0d1015); }
+
+  /* state matrix */
+  .states { display: grid; gap: 1px; background: var(--sh-line); border: 1px solid var(--sh-line-s); }
+  .state-row {
+    display: grid; grid-template-columns: 116px minmax(150px, 190px) 1fr;
+    gap: 14px; align-items: center;
+    background: var(--sh-bg); padding: 11px 14px;
+  }
+  .state-name { font-size: 11px; letter-spacing: 0.1em; color: var(--sh-dim); text-transform: uppercase; }
+  .state-chip { display: flex; }
+  .state-note { font-family: "IBM Plex Sans", sans-serif; font-size: 13px; color: var(--sh-dim); line-height: 1.45; }
+  @media (max-width: 620px) {
+    .state-row { grid-template-columns: 1fr; gap: 7px; }
+  }
+
+  /* dropdown panel */
+  .panel-stage { padding: 0 0 22px; background: var(--sh-bg); }
+  .panel {
+    width: min(360px, 100%);
+    margin-left: auto; margin-right: 14px;
+    background: var(--sh-panel);
+    border: 1px solid var(--sh-line-s);
+    border-top: 0;
+    color: var(--sh-fg);
+  }
+  .p-hero { display: flex; gap: 12px; align-items: center; padding: 15px 15px 13px; }
+  .p-hero-icon {
+    width: 40px; height: 40px; flex: none;
+    display: grid; place-items: center;
+    border: 1px solid var(--sh-rec); color: var(--sh-rec);
+    background: rgba(229,72,77,0.10); font-size: 16px;
+  }
+  .p-hero-txt { min-width: 0; }
+  .p-title { font-size: 13px; color: var(--sh-fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .p-sub { font-size: 11px; color: var(--sh-dim); margin-top: 3px; }
+  .p-time { margin-left: auto; font-size: 17px; color: var(--sh-rec); font-variant-numeric: tabular-nums; }
+
+  .p-sep { height: 1px; background: var(--sh-line); }
+  .p-block { padding: 12px 15px; display: grid; gap: 10px; }
+  .p-head {
+    font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase;
+    color: var(--sh-dim);
+  }
+  .track { display: grid; grid-template-columns: 62px 1fr 42px; gap: 9px; align-items: center; font-size: 11px; }
+  .track-lbl { color: var(--sh-dim); }
+  .meter { height: 6px; background: var(--sh-fill); border: 1px solid var(--sh-line); position: relative; }
+  .meter > i { position: absolute; inset: 0 auto 0 0; background: var(--sh-ok); display: block; }
+  .meter.hot > i { background: var(--sh-armed); }
+  .track-val { text-align: right; color: var(--sh-dim); font-variant-numeric: tabular-nums; }
+
+  .kv { display: grid; grid-template-columns: 78px 1fr; gap: 4px 10px; font-size: 11.5px; }
+  .kv dt { color: var(--sh-dim); }
+  .kv dd { margin: 0; color: var(--sh-fg); overflow: hidden; text-overflow: ellipsis; }
+
+  .p-actions { display: flex; gap: 1px; background: var(--sh-line); border-top: 1px solid var(--sh-line); }
+  .p-btn {
+    flex: 1; text-align: center; padding: 11px 6px; font-size: 11.5px;
+    background: var(--sh-panel); color: var(--sh-fg);
+  }
+  .p-btn.primary { background: rgba(229,72,77,0.14); color: var(--sh-rec); }
+  .p-btn.ghost { color: var(--sh-dim); }
+
+  .sess { display: grid; gap: 1px; }
+  .sess-row {
+    display: grid; grid-template-columns: 14px 1fr auto; gap: 9px; align-items: baseline;
+    font-size: 11.5px; padding: 6px 0;
+  }
+  .sess-row.sel { background: var(--sh-sel); margin-inline: -15px; padding-inline: 15px; }
+  .sess-ico { font-size: 10px; text-align: center; }
+  .sess-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .sess-meta { color: var(--sh-dim); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+  .ok { color: var(--sh-ok); } .work { color: var(--sh-work); } .warn { color: var(--sh-armed); } .bad { color: var(--sh-rec); }
+
+  /* notification */
+  .notif-stage { background: var(--sh-bg); padding: 22px 14px; display: grid; gap: 16px; justify-items: end; }
+  .notif {
+    width: min(370px, 100%);
+    background: var(--sh-panel);
+    border: 1px solid var(--sh-line-s);
+    border-left: 2px solid var(--sh-armed);
+    color: var(--sh-fg);
+  }
+  .notif.stop { border-left-color: var(--sh-rec); }
+  .notif.done { border-left-color: var(--sh-work); }
+  .n-body { padding: 13px 15px; display: grid; gap: 5px; }
+  .n-app { font-size: 10px; letter-spacing: 0.14em; text-transform: uppercase; color: var(--sh-dim); }
+  .n-title { font-size: 13px; }
+  .n-text { font-size: 11.5px; color: var(--sh-dim); line-height: 1.5; }
+  .n-acts { display: flex; gap: 1px; background: var(--sh-line); border-top: 1px solid var(--sh-line); }
+  .n-act { flex: 1; text-align: center; padding: 10px 6px; font-size: 11.5px; background: var(--sh-panel); }
+  .n-act.yes { background: rgba(217,164,65,0.14); color: var(--sh-armed); }
+  .n-act.stopyes { background: rgba(229,72,77,0.14); color: var(--sh-rec); }
+  .n-act.no { color: var(--sh-dim); }
+  .n-act.resume { background: rgba(110,168,216,0.14); color: var(--sh-work); }
+  .n-key { font-size: 10px; color: var(--sh-dim); padding: 7px 15px; border-top: 1px solid var(--sh-line); }
+  kbd {
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    border: 1px solid var(--sh-line-s); padding: 1px 4px; color: var(--sh-fg);
+  }
+
+  /* aside — a callout that is not a card */
+  .aside {
+    border-left: 2px solid var(--mark);
+    padding: 4px 0 4px 16px;
+    margin: 26px 0 0;
+  }
+  .aside h3 { margin-bottom: 4px; }
+  .aside p { color: var(--ink-2); font-size: 14px; margin-bottom: 0; }
+
+  /* admin surface mockup — dark like the shell, but table-dense and wider */
+  .admin {
+    background: var(--sh-bg);
+    border: 1px solid var(--sh-line-s);
+    color: var(--sh-fg);
+    font-family: "JetBrains Mono", monospace;
+    overflow-x: auto;
+  }
+  .adm-bar {
+    display: flex; align-items: center; gap: 16px;
+    padding: 10px 14px; border-bottom: 1px solid var(--sh-line);
+    background: var(--sh-bar); font-size: 11.5px;
+  }
+  .adm-bar .brand { color: var(--sh-fg); }
+  .adm-tab { color: var(--sh-dim); }
+  .adm-tab.on { color: var(--sh-fg); box-shadow: inset 0 -2px 0 var(--sh-work); padding-bottom: 3px; }
+  .adm-bar .spacer { margin-left: auto; }
+
+  .adm-note {
+    padding: 9px 14px; font-size: 11px; color: var(--sh-armed);
+    background: rgba(217,164,65,0.08); border-bottom: 1px solid var(--sh-line);
+  }
+  .adm-table { width: 100%; border-collapse: collapse; font-size: 11.5px; min-width: 620px; }
+  .adm-table th {
+    text-align: left; padding: 9px 14px; color: var(--sh-dim);
+    font-size: 10px; letter-spacing: 0.12em; text-transform: uppercase;
+    border-bottom: 1px solid var(--sh-line-s); font-weight: 400;
+  }
+  .adm-table td {
+    padding: 10px 14px; border-bottom: 1px solid var(--sh-line);
+    color: var(--sh-fg); vertical-align: middle;
+  }
+  .adm-table tr.sel td { background: var(--sh-sel); }
+  .adm-table td small { display: block; color: var(--sh-dim); font-size: 10px; margin-top: 2px; }
+  .pill {
+    display: inline-block; padding: 2px 7px; font-size: 10px;
+    border: 1px solid currentColor; white-space: nowrap;
+  }
+  .pill.on   { color: var(--sh-ok); }
+  .pill.off  { color: var(--sh-dim); }
+  .pill.pend { color: var(--sh-armed); }
+  .pill.gone { color: var(--sh-rec); }
+  .adm-foot {
+    display: flex; gap: 1px; background: var(--sh-line);
+    border-top: 1px solid var(--sh-line-s);
+  }
+  .adm-btn { padding: 10px 16px; font-size: 11.5px; background: var(--sh-bg); color: var(--sh-fg); }
+  .adm-btn.ghost { color: var(--sh-dim); }
+  .adm-btn.danger { color: var(--sh-rec); }
+  .adm-btn.spacer { flex: 1; }
+
+  /* queue rows for unnamed speakers */
+  .queue { display: grid; gap: 1px; background: var(--sh-line); }
+  .q-row { background: var(--sh-bg); padding: 13px 14px; display: grid; gap: 9px; }
+  .q-top { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; font-size: 11.5px; }
+  .q-spk { color: var(--sh-fg); }
+  .q-src { color: var(--sh-dim); font-size: 10.5px; }
+  .q-quote {
+    font-family: "IBM Plex Sans", sans-serif; font-size: 12.5px;
+    color: var(--sh-dim); border-left: 1px solid var(--sh-line-s);
+    padding-left: 11px; line-height: 1.5;
+  }
+  .q-acts { display: flex; gap: 8px; flex-wrap: wrap; }
+  .q-btn {
+    padding: 6px 11px; font-size: 11px;
+    border: 1px solid var(--sh-line-s); color: var(--sh-fg); background: var(--sh-fill);
+  }
+  .q-btn.primary { border-color: var(--sh-work); color: var(--sh-work); }
+  .q-btn.guarded { border-color: var(--sh-armed); color: var(--sh-armed); }
+  .q-btn.ghost { border-color: var(--sh-line); color: var(--sh-dim); }
+
+  /* two-step consent explainer */
+  .steps { display: grid; grid-template-columns: 1fr 1fr; gap: 1px; background: var(--rule); border: 1px solid var(--rule); }
+  .step { background: var(--paper); padding: 18px; display: grid; gap: 7px; align-content: start; }
+  .step-k {
+    font-family: "JetBrains Mono", monospace; font-size: 10px;
+    letter-spacing: 0.14em; text-transform: uppercase;
+  }
+  .step.safe .step-k { color: var(--ink-3); }
+  .step.gated .step-k { color: var(--mark); }
+  .step h3 { margin: 0; }
+  .step p { font-size: 13.5px; color: var(--ink-2); margin: 0; }
+  @media (max-width: 620px) { .steps { grid-template-columns: 1fr; } }
+
+  /* caption under every mockup */
+  .cap {
+    font-family: "IBM Plex Sans", sans-serif;
+    font-size: 12.5px; color: var(--ink-3);
+    margin-top: 9px; max-width: 66ch;
+  }
+  .cap b { color: var(--ink-2); font-weight: 600; }
+
+  figure { margin: 0 0 30px; }
+
+  /* ---- detection logic diagram ---- */
+  .gate { display: grid; gap: 12px; }
+  .gate-row {
+    display: grid; grid-template-columns: 26px 1fr; gap: 12px; align-items: start;
+    border-left: 2px solid var(--rule); padding: 10px 0 10px 14px;
+  }
+  .gate-row.and { border-left-color: var(--mark); }
+  .gate-n {
+    font-family: "JetBrains Mono", monospace; font-size: 11px;
+    color: var(--mark); padding-top: 2px;
+  }
+  .gate-t { font-size: 14px; }
+  .gate-t small { display: block; color: var(--ink-3); font-size: 12.5px; margin-top: 3px; }
+
+  /* ---- file tree ---- */
+  .tree {
+    font-family: "JetBrains Mono", monospace; font-size: 12.5px; line-height: 1.75;
+    background: var(--paper-2); border: 1px solid var(--rule);
+    padding: 16px 18px; overflow-x: auto; white-space: pre;
+    color: var(--ink-2);
+  }
+  .tree b { color: var(--ink); font-weight: 500; }
+  .tree i { color: var(--ink-3); font-style: normal; }
+  .tree u { color: var(--mark); text-decoration: none; }
+
+  /* ---- terminal mockup ---- */
+  .term {
+    background: var(--sh-bg);
+    border: 1px solid var(--sh-line-s);
+    color: var(--sh-fg);
+    font-family: "JetBrains Mono", ui-monospace, monospace;
+    font-size: 12.5px; line-height: 1.7;
+    padding: 15px 17px;
+    overflow-x: auto; white-space: pre;
+  }
+  .term .p { color: var(--sh-work); }
+  .term .ok { color: var(--sh-ok); }
+  .term .no { color: var(--sh-rec); }
+  .term .wn { color: var(--sh-armed); }
+  .term .dim { color: var(--sh-dim); }
+
+  /* ---- tables ---- */
+  .tbl-wrap { overflow-x: auto; }
+  table { border-collapse: collapse; width: 100%; font-size: 13.5px; min-width: 460px; }
+  th, td { text-align: left; padding: 9px 12px 9px 0; border-bottom: 1px solid var(--rule); vertical-align: top; }
+  th {
+    font-family: "JetBrains Mono", monospace; font-size: 10.5px;
+    letter-spacing: 0.12em; text-transform: uppercase; color: var(--ink-3);
+    border-bottom-color: var(--ink-3);
+  }
+  td code { background: none; border: 0; padding: 0; color: var(--ink); }
+
+  /* ---- open decisions ---- */
+  .q { display: grid; gap: 2px; padding: 14px 0; border-bottom: 1px solid var(--rule); }
+  .q:last-child { border-bottom: 0; }
+  .q-t { font-weight: 600; font-size: 14.5px; }
+  .q-b { font-size: 13.5px; color: var(--ink-2); max-width: 66ch; }
+
+  .foot {
+    margin-top: 44px; padding-top: 20px; border-top: 2px solid var(--ink);
+    font-family: "JetBrains Mono", monospace; font-size: 11px; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 6px 20px;
+  }
+</style>
+</head>
+<body>
+
+
+<div class="wrap">
+
+  <header class="mast">
+    <div class="kicker">Sketch · Omarchy 4 shell plugin · not yet built</div>
+    <h1>Munin bar plugin</h1>
+    <p class="standfirst">Detects a Teams call from PipeWire and the window title, asks once before recording, and keeps the state visible in the top bar until the transcript has landed. Microsoft 365 supplies the agenda and the attendee list; a local voice register keeps speaker names consistent from one meeting to the next.</p>
+    <div class="mast-meta">
+      <span>2026-09-14</span>
+      <span>local.munin</span>
+      <span>kinds: service, bar-widget</span>
+      <span>Omarchy 4.0.0.alpha</span>
+    </div>
+  </header>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">State machine</div>
+      <h2>Seven states, one of them visible at a time</h2>
+      <p class="lede">The bar widget renders exactly one state. The rule that makes the whole thing trustworthy: nothing moves from <em>detected</em> to <em>recording</em> without a human saying so.</p>
+    </div>
+
+    <figure>
+      <div class="shell states">
+        <div class="state-row">
+          <div class="state-name">Idle</div>
+          <div class="state-chip"></div>
+          <div class="state-note">Widget is hidden. No Teams call, nothing to say.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Detected</div>
+          <div class="state-chip"><span class="mod armed">🎙 <span>Teams</span></span></div>
+          <div class="state-note">A call is live and Munin is <em>not</em> recording. Dim glyph, no timer. This state is honest about doing nothing.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Recording</div>
+          <div class="state-chip"><span class="mod rec"><span class="dot pulse"></span> <span class="num">00:42:11</span></span></div>
+          <div class="state-note">Red, pulsing, elapsed time counting. Unmissable by design — you should never wonder whether you are being recorded.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Ending</div>
+          <div class="state-chip"><span class="mod rec"><span class="dot"></span> <span class="num">00:47:03</span></span></div>
+          <div class="state-note">Call streams have gone. Still recording, grace period running, stop prompt on screen.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Transcribing</div>
+          <div class="state-chip"><span class="mod hl">⟳ <span>2 queued</span></span></div>
+          <div class="state-note">Capture is done and safe on disk. Worker is running or waiting for a sink.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Done</div>
+          <div class="state-chip"><span class="mod live">✓ <span>Transcript ready</span></span></div>
+          <div class="state-note">Shown for 30 s after the last transcript lands, then back to idle.</div>
+        </div>
+        <div class="state-row">
+          <div class="state-name">Failed</div>
+          <div class="state-chip"><span class="mod" style="color:var(--sh-rec)">! <span>Retry</span></span></div>
+          <div class="state-note">Audio is retained. Sticks around until acknowledged — a failure that hides itself is a lost meeting.</div>
+        </div>
+      </div>
+      <figcaption class="cap">Glyphs here are stand-ins. The real widget uses the same nerd-font set as the rest of the bar — <b>ScreenRecording.qml</b> already uses <code>󰻂</code> (U+F0EC2) for its recording indicator, which is the house precedent to follow.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">In place</div>
+      <h2>Where it sits in the bar</h2>
+      <p class="lede">Right section, immediately left of the tray, so it sits with the other status widgets rather than competing with the clock.</p>
+    </div>
+
+    <figure>
+      <div class="shell frame">
+        <div class="bar">
+          <div class="bar-sec">
+            <span class="mod live">󰣇</span>
+            <span class="mod live">1 2 <b style="color:var(--sh-fg)">3</b></span>
+          </div>
+          <div class="bar-sec">
+            <span class="mod live">Monday 14:07</span>
+          </div>
+          <div class="bar-sec">
+            <span class="mod rec"><span class="dot pulse"></span> <span class="num">00:42:11</span></span>
+            <span class="mod">󰅢</span>
+            <span class="mod">󰂯</span>
+            <span class="mod">󰤨</span>
+            <span class="mod">󰕾</span>
+            <span class="mod">󰍹</span>
+            <span class="mod">⏻</span>
+          </div>
+        </div>
+        <div class="desk"></div>
+      </div>
+      <figcaption class="cap">Recording state. Placement via <code>omarchy bar put local.munin --before omarchy.tray</code>, which writes it into <code>shell.json</code> and hot-reloads — no restart.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Prompts</div>
+      <h2>The three things it tells you</h2>
+      <p class="lede">Omarchy's notification daemon reports <code>actionsSupported: true</code>, so both prompts can carry real buttons. The keybind is offered alongside, never instead — the notification can be missed, the keybind cannot.</p>
+    </div>
+
+    <figure>
+      <div class="shell notif-stage">
+        <div class="notif">
+          <div class="n-body">
+            <div class="n-app">Munin</div>
+            <div class="n-title">Teams meeting detected</div>
+            <div class="n-text">Weekly quality sync · 4 participants · scheduled 14:00–15:00</div>
+          </div>
+          <div class="n-acts">
+            <div class="n-act yes">Record</div>
+            <div class="n-act no">Not this one</div>
+            <div class="n-act no">Never for this meeting</div>
+          </div>
+          <div class="n-key"><kbd>SUPER</kbd> <kbd>SHIFT</kbd> <kbd>R</kbd> does the same thing</div>
+        </div>
+
+        <div class="notif stop">
+          <div class="n-body">
+            <div class="n-app">Munin</div>
+            <div class="n-title">Meeting looks finished</div>
+            <div class="n-text">Teams audio stopped 1:12 ago. Still recording — stops by itself at 2:00 unless you keep it.</div>
+          </div>
+          <div class="n-acts">
+            <div class="n-act stopyes">Stop &amp; transcribe</div>
+            <div class="n-act no">Keep recording</div>
+          </div>
+        </div>
+
+        <div class="notif done">
+          <div class="n-body">
+            <div class="n-app">Munin</div>
+            <div class="n-title">Recording stopped</div>
+            <div class="n-text">Weekly quality sync · 47 min captured · transcribing now. Resume within 10 minutes and it continues the same session.</div>
+          </div>
+          <div class="n-acts">
+            <div class="n-act resume">Resume</div>
+            <div class="n-act no">Open session</div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap"><b>The asymmetry is deliberate.</b> Starting requires an explicit yes; stopping happens on a timer if you say nothing. The failure mode of a missed start prompt is no recording; the failure mode of a missed stop prompt would be recording the rest of your afternoon. The third notification is what makes the timer safe to trust — an auto-stop that happens silently is indistinguishable from a crash.</figcaption>
+
+      <div class="aside">
+        <h3>Resume continues, it does not restart</h3>
+        <p>A meeting that breaks for five minutes and comes back is one meeting. Resuming inside the window reopens the same session folder and writes <code>mic.002.opus</code> alongside the first pair; <code>session.json</code> carries a <code>segments[]</code> list and the worker concatenates them into one transcript with a gap marker. Past the window, a resume starts a fresh session — two half-transcripts of one meeting is the outcome this avoids.</p>
+      </div>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Panel</div>
+      <h2>Click the indicator</h2>
+      <p class="lede">A dropdown in the same idiom as the audio and network panels — <code>qs.Ui</code>'s <code>Panel</code> base gives the popup, the keyboard navigation and the IPC open/close for free.</p>
+    </div>
+
+    <figure>
+      <div class="shell frame">
+        <div class="bar">
+          <div class="bar-sec">
+            <span class="mod live">󰣇</span>
+            <span class="mod live">1 2 <b style="color:var(--sh-fg)">3</b></span>
+          </div>
+          <div class="bar-sec"><span class="mod live">Monday 14:07</span></div>
+          <div class="bar-sec">
+            <span class="mod rec" style="background:var(--sh-sel)"><span class="dot pulse"></span> <span class="num">00:42:11</span></span>
+            <span class="mod">󰅢</span>
+            <span class="mod">󰂯</span>
+            <span class="mod">󰤨</span>
+          </div>
+        </div>
+
+        <div class="panel-stage">
+          <div class="panel">
+            <div class="p-hero">
+              <div class="p-hero-icon">●</div>
+              <div class="p-hero-txt">
+                <div class="p-title">Weekly quality sync</div>
+                <div class="p-sub">from calendar · 4 participants</div>
+              </div>
+              <div class="p-time num">42:11</div>
+            </div>
+
+            <div class="p-sep"></div>
+            <div class="p-block">
+              <div class="p-head">Tracks</div>
+              <div class="track">
+                <span class="track-lbl">You</span>
+                <span class="meter"><i style="width:34%"></i></span>
+                <span class="track-val">−21 dB</span>
+              </div>
+              <div class="track">
+                <span class="track-lbl">Meeting</span>
+                <span class="meter hot"><i style="width:68%"></i></span>
+                <span class="track-val">−9 dB</span>
+              </div>
+            </div>
+
+            <div class="p-sep"></div>
+            <div class="p-block">
+              <div class="p-head">Session</div>
+              <dl class="kv">
+                <dt>Started</dt><dd>13:25</dd>
+                <dt>Source</dt><dd>Teams · browser tab</dd>
+                <dt>Size</dt><dd>7.8 MB · two tracks + mix</dd>
+                <dt>Backend</dt><dd>local · CUDA · warm</dd>
+              </dl>
+            </div>
+
+            <div class="p-actions">
+              <div class="p-btn primary">Stop &amp; transcribe</div>
+              <div class="p-btn">Add marker</div>
+              <div class="p-btn ghost">Discard</div>
+            </div>
+
+            <div class="p-sep"></div>
+            <div class="p-block">
+              <div class="p-head">Recent</div>
+              <div class="sess">
+                <div class="sess-row sel">
+                  <span class="sess-ico work">⟳</span>
+                  <span class="sess-name">Supplier audit prep</span>
+                  <span class="sess-meta">transcribing · 3 min left</span>
+                </div>
+                <div class="sess-row">
+                  <span class="sess-ico ok">✓</span>
+                  <span class="sess-name">Deviation review, line 2</span>
+                  <span class="sess-meta">today 10:30 · 52 min</span>
+                </div>
+                <div class="sess-row">
+                  <span class="sess-ico bad">!</span>
+                  <span class="sess-name">Customer onboarding call</span>
+                  <span class="sess-meta">no sink · audio kept</span>
+                </div>
+                <div class="sess-row">
+                  <span class="sess-ico ok">✓</span>
+                  <span class="sess-name">Management review</span>
+                  <span class="sess-meta">Fri · 1 h 14 min</span>
+                </div>
+              </div>
+            </div>
+
+            <div class="p-actions">
+              <div class="p-btn ghost">Open recordings folder</div>
+              <div class="p-btn ghost">Settings</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap">Meeting titles are synthetic. <b>Add marker</b> timestamps the moment you click it, so a decision you want to find later becomes a searchable line in the transcript instead of a memory of roughly when it happened.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Detection</div>
+      <h2>Teams arrives in three shapes</h2>
+      <p class="lede">Native client, installed PWA, or a tab in Chromium. They announce themselves differently, and only one of them says "Teams" to PipeWire — so identity and activity have to be established separately.</p>
+    </div>
+
+    <div class="tbl-wrap" style="margin-bottom:26px">
+      <table>
+        <thead>
+          <tr><th>Shape</th><th>PipeWire says</th><th>Window says</th><th>Identified by</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Native app<br><span style="color:var(--ink-3);font-size:12.5px">teams-for-linux</span></td>
+            <td><code>application.name</code><br>= Teams</td>
+            <td>class <code>teams-for-linux</code></td>
+            <td>PipeWire alone is enough</td>
+          </tr>
+          <tr>
+            <td>Installed PWA</td>
+            <td><code>Chromium</code></td>
+            <td>class <code>chrome-teams.microsoft.com__-Default</code></td>
+            <td>Window class</td>
+          </tr>
+          <tr>
+            <td>Browser tab<br><span style="color:var(--ink-3);font-size:12.5px">the case on this machine today</span></td>
+            <td><code>Chromium</code></td>
+            <td>title contains <code>Microsoft Teams</code></td>
+            <td>Window title</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="gate">
+      <div class="gate-row and">
+        <div class="gate-n">A</div>
+        <div class="gate-t">A call is live: one process holds a playback stream <em>and</em> a capture stream at once
+          <small>Read from <code>Quickshell.Services.Pipewire</code> inside the plugin — no polling of <code>pw-dump</code>. This condition alone removes the false-positive class: a video playing in a tab has playback but no microphone. True for all three shapes.</small>
+        </div>
+      </div>
+      <div class="gate-row and">
+        <div class="gate-n">AND</div>
+        <div class="gate-t">It is Teams: any one of the three identifiers above matches
+          <small>Match on the PipeWire client first, since the native app is unambiguous and costs nothing. Fall back to the Hyprland window belonging to that stream's PID and test class, then title. A browser with no Teams window open never passes, however many tabs are making noise.</small>
+        </div>
+      </div>
+      <div class="gate-row">
+        <div class="gate-n">→</div>
+        <div class="gate-t">Prompt once, then stay quiet
+          <small>One notification per call. Dismissing it does not re-ask; the widget stays in <em>detected</em> so the keybind and the panel remain available.</small>
+        </div>
+      </div>
+    </div>
+
+    <p style="margin-top:22px">Keeping identity separate from activity is what makes the other platforms a configuration change rather than a rewrite: Zoom, Meet and Slack are additional entries in the identifier table, and condition A is already true for all of them.</p>
+
+    <p><strong>Known conflict:</strong> <code>voxtype.service</code> is running on this machine and also wants the microphone. PipeWire allows multiple readers in principle, but this has to be confirmed on hardware before it bites in the middle of a real meeting.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Context</div>
+      <h2>What Microsoft 365 is asked for</h2>
+      <p class="lede">The calendar never starts a recording. It answers the questions a recording cannot answer for itself: what this meeting is called, who is in it, and what it is about.</p>
+    </div>
+
+    <div class="tbl-wrap" style="margin-bottom:26px">
+      <table>
+        <thead>
+          <tr><th>Pulled</th><th>From</th><th>Used for</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>Subject, start, end, organiser</td>
+            <td>Outlook calendar event</td>
+            <td>Session title and folder name, replacing the timestamp fallback</td>
+          </tr>
+          <tr>
+            <td>Attendees + response status</td>
+            <td>Outlook calendar event</td>
+            <td>The closed set for speaker assignment. Four candidates is a far easier problem than open-set identification</td>
+          </tr>
+          <tr>
+            <td>Body / agenda text</td>
+            <td>Outlook calendar event</td>
+            <td>Decode-time glossary bias. An invite naming a customer promotes that customer's vocabulary into the ~40 terms Whisper's prompt can hold</td>
+          </tr>
+          <tr>
+            <td>Recurring series id</td>
+            <td>Outlook calendar event</td>
+            <td>Makes "never record this meeting" stick to the series rather than one instance</td>
+          </tr>
+          <tr>
+            <td>Actual join / leave times</td>
+            <td>Teams attendance report</td>
+            <td>Who was <em>really</em> there, and when. Narrows the candidate set per segment rather than per meeting</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <figure>
+      <div class="shell notif-stage" style="padding-bottom:22px">
+        <div class="panel" style="margin-right:0">
+          <div class="p-block">
+            <div class="p-head">Meeting context</div>
+            <dl class="kv">
+              <dt>Subject</dt><dd>Weekly quality sync</dd>
+              <dt>Organiser</dt><dd>Kari Nordmann</dd>
+              <dt>Attending</dt><dd>4 of 6 invited</dd>
+              <dt>Series</dt><dd>Weekly, Mondays 14:00</dd>
+            </dl>
+          </div>
+          <div class="p-sep"></div>
+          <div class="p-block">
+            <div class="p-head">Agenda · biasing 38 terms</div>
+            <div class="q-quote" style="padding-left:0;border:0">
+              1. Deviation backlog, line 2<br>
+              2. Supplier audit — corrective actions<br>
+              3. ISO 42001 readiness review
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap">Synthetic agenda. The point of showing it in the panel is auditability: you can see which meeting Munin thinks it is recording <b>before</b> the transcript is written, rather than discovering a mismatch afterwards.</figcaption>
+    </figure>
+
+    <div class="aside">
+      <h3>The attendance report may not be available to you</h3>
+      <p>Join and leave times come from Graph's online-meeting artifacts, which are typically gated behind tenant-admin consent rather than user consent. Assume the invite list is what you get, and treat the attendance report as an upgrade to request separately. The closed-set assignment works either way; it is just less sharp.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Voices</div>
+      <h2>A register of who sounds like whom</h2>
+      <p class="lede">A voice profile is a name and an embedding. Once someone is in the register they are named correctly in an ad-hoc call with no invite, in a meeting where the attendee list is wrong, and in a transcript written six months from now.</p>
+    </div>
+
+    <div class="steps">
+      <div class="step safe">
+        <div class="step-k">One transcript</div>
+        <h3>Name a speaker</h3>
+        <p>Assign <code>SPEAKER_01</code> a name here and now. Nothing is stored beyond the label on this transcript. Fast, reversible, and enough for anyone you meet once.</p>
+      </div>
+      <div class="step gated">
+        <div class="step-k">Every transcript</div>
+        <h3>Enrol a voice</h3>
+        <p>Store an embedding so the same person is recognised automatically from here on. One extra click at the moment you already know who it was.</p>
+      </div>
+    </div>
+
+    <p style="margin-top:26px">Two actions rather than one keeps the register small enough to stay accurate. Every profile you add is another candidate the matcher has to discriminate against, so enrolling the six colleagues you meet weekly gives better results than enrolling everyone who ever joined a call. The register is worth pruning, which is why the admin view leads with match confidence and last-heard rather than with a count.</p>
+
+    <h3 style="margin-top:30px">Attribution becomes four tiers</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>Tier</th><th>Method</th><th>Error rate</th></tr></thead>
+        <tbody>
+          <tr><td>1 · You</td><td>Energy on track 1 and not track 2</td><td>None. True by construction — no model involved</td></tr>
+          <tr><td>2 · Enrolled</td><td>Embedding match against the register, above threshold</td><td>Low, and measurable. Confidence stored per segment</td></tr>
+          <tr><td>3 · Invited</td><td>Closed-set assignment against the attendee list</td><td>Moderate. "Which of these four" not "who is this"</td></tr>
+          <tr><td>4 · Unknown</td><td>Positional label kept: <code>SPEAKER_02</code></td><td>Honest. Better a positional label than a confident wrong name</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3 style="margin-top:30px">What a profile holds</h3>
+    <div class="tree">voices/ola-nordmann.json
+  name        <b>Ola Nordmann</b>                       <i>what appears in transcripts</i>
+  email       <b>ola@example.no</b>                     <i>optional — links to the M365 identity for invite matching</i>
+  embedding   <b>centroid + per-sample vectors</b>
+  model       <b>ecapa-tdnn@1.0</b>                     <i>embeddings are model-specific; an upgrade invalidates them</i>
+  samples     <b>4 clips · 3 m 12 s total</b>           <i>which sessions they came from</i>
+  accuracy    <b>last 30 matches, mean confidence</b>   <i>drift shows up here before it shows up in transcripts</i>
+  status      <b>active | disabled</b>                  <i>disabled keeps the profile but stops matching</i></div>
+
+    <div class="aside">
+      <h3>Keep the clips, not just the centroid</h3>
+      <p>An embedding only means anything to the model that produced it, so changing the embedder invalidates every profile at once. Retaining the enrolment clips turns that from re-enrolling everyone into <code>munin voice reembed --all</code>. It is a few minutes of audio per person and the only thing standing between you and starting the register over.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Admin</div>
+      <h2>Administering the register</h2>
+      <p class="lede">A local tool at <code>munin admin</code>, loopback only. The bar panel links to it and never embeds it — a consent record and an audit log want a table, not a dropdown.</p>
+    </div>
+
+    <figure>
+      <div class="admin">
+        <div class="adm-bar">
+          <span class="brand">munin admin</span>
+          <span class="adm-tab on">Voices</span>
+          <span class="adm-tab">Review · 3</span>
+          <span class="adm-tab">Sessions</span>
+          <span class="adm-tab">Transcription</span>
+          <span class="adm-tab">Settings</span>
+          <span class="spacer"></span>
+          <span class="adm-tab">127.0.0.1:7734</span>
+        </div>
+        <table class="adm-table">
+          <thead>
+            <tr><th>Person</th><th>Status</th><th>Samples</th><th>Match</th><th>Heard in</th><th>Last heard</th></tr>
+          </thead>
+          <tbody>
+            <tr>
+              <td>Kari Nordmann<small>kari@example.no</small></td>
+              <td><span class="pill on">Active</span></td>
+              <td>6 · 5 m 48 s</td>
+              <td>0.94<small>52 matches</small></td>
+              <td>38 meetings</td>
+              <td>today 13:25</td>
+            </tr>
+            <tr>
+              <td>Ola Nordmann<small>ola@example.no</small></td>
+              <td><span class="pill on">Active</span></td>
+              <td>4 · 3 m 12 s</td>
+              <td>0.91<small>30 matches</small></td>
+              <td>26 meetings</td>
+              <td>today 13:25</td>
+            </tr>
+            <tr>
+              <td>Johan Berg<small>johan@example.no</small></td>
+              <td><span class="pill on">Active</span></td>
+              <td>2 · 1 m 04 s</td>
+              <td><span class="warn">0.68</span><small>thin — add a sample</small></td>
+              <td>4 meetings</td>
+              <td>Friday 09:00</td>
+            </tr>
+            <tr class="sel">
+              <td>Ingrid Moe<small>ingrid@example.no</small></td>
+              <td><span class="pill off">Disabled</span></td>
+              <td>3 · 2 m 20 s</td>
+              <td>—<small>not matching</small></td>
+              <td>2 meetings</td>
+              <td>2026-08-28</td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="adm-foot">
+          <span class="adm-btn">Add sample</span>
+          <span class="adm-btn ghost">Rename</span>
+          <span class="adm-btn ghost">Disable</span>
+          <span class="adm-btn ghost">Re-embed all</span>
+          <span class="adm-btn spacer"></span>
+          <span class="adm-btn danger">Delete profile</span>
+        </div>
+      </div>
+      <figcaption class="cap">All people synthetic. The column that earns its place is <b>Match</b>: a profile built from one short clip will quietly mislabel people, and 0.68 across four meetings says so before the transcripts do. <b>Add sample</b> pulls another confirmed clip from a recent session rather than asking anyone to record themselves.</figcaption>
+    </figure>
+
+    <figure>
+      <h3>After each meeting: the review queue</h3>
+      <p>Diarization never names anyone on its own. Clusters it could not assign land here, with enough audio and text to recognise who it was.</p>
+      <div class="shell admin" style="margin-top:14px">
+        <div class="adm-note">3 unnamed speakers across 2 sessions · naming one re-renders that transcript in place</div>
+        <div class="queue">
+          <div class="q-row">
+            <div class="q-top">
+              <span class="q-spk">SPEAKER_02</span>
+              <span class="q-src">Weekly quality sync · 6 turns · 2 m 41 s</span>
+            </div>
+            <div class="q-quote">"…we closed eleven of the deviations on line two, the rest are waiting on the supplier's corrective action…"</div>
+            <div class="q-acts">
+              <span class="q-btn primary">Ola Nordmann</span>
+              <span class="q-btn">Someone else</span>
+              <span class="q-btn guarded">Name and enrol</span>
+              <span class="q-btn ghost">Leave unnamed</span>
+            </div>
+          </div>
+          <div class="q-row">
+            <div class="q-top">
+              <span class="q-spk">SPEAKER_03</span>
+              <span class="q-src">Supplier audit prep · 2 turns · 0 m 19 s</span>
+            </div>
+            <div class="q-quote">"…can we take that offline…"</div>
+            <div class="q-acts">
+              <span class="q-btn">Name</span>
+              <span class="q-btn ghost">Leave unnamed</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <figcaption class="cap">The first suggestion comes from the invite list. <b>Name and enrol</b> does both in one click and is the normal way profiles get created — you are already looking at a cluster you have just identified, which is the best possible enrolment sample. Nineteen seconds offers no enrolment option: too thin to build a profile that would match reliably.</figcaption>
+    </figure>
+
+    <h3 style="margin-top:34px">Same actions from the CLI</h3>
+    <div class="tree">munin voice list                              <i>the register, as above</i>
+munin voice enrol <b>"Ola Nordmann"</b> --from <b>&lt;session&gt;</b> --speaker <b>2</b>
+munin voice add-sample <b>ola</b> --from <b>&lt;session&gt;</b> --speaker <b>1</b>   <i>strengthens a thin profile</i>
+munin voice rename <b>ola</b> <b>"Ola Nordmann"</b>
+munin voice disable <b>ola</b>                       <i>keeps the profile, stops matching</i>
+munin voice delete <b>ola</b>
+munin voice reembed --all                     <i>after a model change, from retained clips</i>
+munin review                                  <i>the queue, in the terminal</i></div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Storage</div>
+      <h2>Everything under <code>~/munin/</code></h2>
+      <p class="lede">One named root so a stray folder in your home directory says what it is and what put it there. Recordings are chronological on disk, because that is the only ordering that never needs rewriting; everything else is a symlink view, cheap to rebuild and safe to delete.</p>
+    </div>
+
+    <div class="tree">~/munin/
+├── <b>recordings/</b>
+│   └── <b>2026/09/</b>
+│       ├── <b>2026-09-14T1325-weekly-quality-sync/</b>
+│       │   ├── <u>session.json</u>      <i>state, title, source, calendar id, sink, checksums</i>
+│       │   ├── mic.opus          <i>track 1 — you, 24 kbps mono</i>
+│       │   ├── app.opus          <i>track 2 — everyone else</i>
+│       │   ├── mixed.mp3         <i>64 kbps, for anything that wants one file</i>
+│       │   ├── <u>transcript.txt</u>    <i>[HH:MM:SS - HH:MM:SS] Speaker: text</i>
+│       │   ├── transcript.json   <i>word timings, confidences, speaker turns</i>
+│       │   └── markers.json      <i>anything you clicked "add marker" on</i>
+│       └── 2026-09-14T1030-deviation-review-line-2/
+│           └── …
+│
+├── <b>by-title/</b>                 <i>symlinks, regenerated on write</i>
+│   ├── weekly-quality-sync/2026-09-14 → ../../recordings/2026/09/…
+│   └── management-review/2026-09-11  → ../../recordings/2026/09/…
+│
+├── <b>by-participant/</b>           <i>only for calendar-matched sessions</i>
+│   └── ola-nordmann/ → …
+│
+├── <b>inbox/</b>                    <i>captured, not yet transcribed</i>
+│   └── 2026-09-14T1410-untitled → ../recordings/2026/09/…
+│
+├── <u>voices/</u>                   <i>the register</i>
+│   ├── ola-nordmann.json     <i>name, embedding, samples, accuracy</i>
+│   ├── kari-nordmann.json
+│   └── samples/              <i>enrolment clips, kept so profiles survive a model change</i>
+│
+├── <u>config.toml</u>               <i>transcription backends, detection, paths</i>
+├── munin.log
+└── <b>latest</b> → recordings/2026/09/2026-09-14T1325-weekly-quality-sync</div>
+
+    <p style="margin-top:22px">Two properties worth keeping: the directory name alone tells you <em>when</em> and <em>what</em> without opening anything, and <code>grep -r</code> across the tree searches every transcript you own with no index to maintain. <code>session.json</code> is the only file the worker writes state into, so a half-finished session is always identifiable after a crash.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Backends</div>
+      <h2>Where transcription happens is configuration</h2>
+      <p class="lede">The recorder never knows who transcribes. Three backends satisfy one interface, ordered into a fallback chain, so a meeting captured on a machine with no GPU still gets a transcript without you doing anything.</p>
+    </div>
+
+    <div class="tbl-wrap" style="margin-bottom:26px">
+      <table>
+        <thead>
+          <tr><th>Backend</th><th>Runs on</th><th>60-min meeting</th><th>Suits</th></tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><code>local</code></td>
+            <td>This machine, faster-whisper on CUDA or whisper.cpp on Vulkan</td>
+            <td>5–8 min on a 3070<br>30–40 min on an iGPU</td>
+            <td>The desktop. No network, no dependency on anything being awake</td>
+          </tr>
+          <tr>
+            <td><code>ssh</code></td>
+            <td>Another machine you own — audio pushed, transcript pulled back</td>
+            <td>5–8 min<br>+ ~20 s transfer</td>
+            <td>The mini PC records, the desktop does the work. 11 MB of Opus makes the transfer irrelevant</td>
+          </tr>
+          <tr>
+            <td><code>api</code></td>
+            <td>Any OpenAI-audio-compatible endpoint, gateway or hosted</td>
+            <td>5–6 min</td>
+            <td>A shared cluster, or borrowing capacity you do not own</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+
+    <div class="aside" style="margin-top:0;margin-bottom:26px">
+      <h3>The API backend splits the pipeline</h3>
+      <p>The OpenAI audio API returns text and optionally word timings. It has no speaker field, so diarization and voice matching cannot go through it and always run locally regardless of where the words came from. That is the cheaper half, and track 1 already identifies you for free, so the split costs little — but it means <code>api</code> is not a way to run Munin on a machine with no compute at all.</p>
+    </div>
+
+    <div class="tree">~/munin/config.toml
+
+[transcribe]
+backend  = <b>"local"</b>                      <i>primary</i>
+fallback = <b>["ssh", "api"]</b>               <i>tried in order; session stays spooled if none answer</i>
+
+[transcribe.local]
+device       = <b>"cuda"</b>                   <i>cuda | vulkan | cpu</i>
+compute_type = <b>"float16"</b>
+model_no     = <b>"NbAiLab/nb-whisper-large"</b>
+model_en     = <b>"openai/whisper-large-v3"</b>
+keep_warm    = <b>true</b>                     <i>both models resident — load dominates inference at this volume</i>
+
+[transcribe.ssh]
+host       = <b>"desktop.lan"</b>
+user       = <b>"siso"</b>
+remote_bin = <b>"~/.local/bin/munin"</b>       <i>same binary, run with --worker-only</i>
+transport  = <b>"rsync"</b>
+
+[transcribe.api]
+endpoint    = <b>"https://gateway.internal/v1/audio/transcriptions"</b>
+model_no    = <b>"nb-whisper-large"</b>
+model_en    = <b>"whisper-large-v3"</b>
+api_key_cmd = <b>"secret-tool lookup service munin-api"</b>   <u>never the key itself</u>
+
+[diarize]
+device = <b>"cuda"</b>                         <i>always local, whatever the ASR backend</i></div>
+
+    <figure style="margin-top:26px">
+      <div class="admin">
+        <div class="adm-bar">
+          <span class="brand">munin admin</span>
+          <span class="adm-tab">Voices</span>
+          <span class="adm-tab">Review · 3</span>
+          <span class="adm-tab">Sessions</span>
+          <span class="adm-tab on">Transcription</span>
+          <span class="adm-tab">Settings</span>
+          <span class="spacer"></span>
+          <span class="adm-tab">127.0.0.1:7734</span>
+        </div>
+        <table class="adm-table">
+          <thead>
+            <tr><th>Order</th><th>Backend</th><th>Target</th><th>State</th><th>Last run</th><th></th></tr>
+          </thead>
+          <tbody>
+            <tr class="sel">
+              <td>1 · primary</td>
+              <td><code style="color:var(--sh-fg)">local</code><small>faster-whisper · cuda</small></td>
+              <td>this machine<small>RTX 3070 · 8 GB · models warm</small></td>
+              <td><span class="pill on">Ready</span></td>
+              <td>today 14:08<small>47 min in 6 m 12 s</small></td>
+              <td><span class="q-btn ghost">Test</span></td>
+            </tr>
+            <tr>
+              <td>2</td>
+              <td><code style="color:var(--sh-fg)">ssh</code><small>rsync + remote worker</small></td>
+              <td>desktop.lan<small>key auth · 18 ms</small></td>
+              <td><span class="pill on">Reachable</span></td>
+              <td>Friday 16:40</td>
+              <td><span class="q-btn ghost">Test</span></td>
+            </tr>
+            <tr>
+              <td>3</td>
+              <td><code style="color:var(--sh-fg)">api</code><small>OpenAI audio</small></td>
+              <td>gateway.internal<small>word timings: unconfirmed</small></td>
+              <td><span class="pill pend">Untested</span></td>
+              <td>never</td>
+              <td><span class="q-btn">Test</span></td>
+            </tr>
+          </tbody>
+        </table>
+        <div class="adm-foot">
+          <span class="adm-btn">Add backend</span>
+          <span class="adm-btn ghost">Reorder</span>
+          <span class="adm-btn ghost">Re-run failed sessions</span>
+          <span class="adm-btn spacer"></span>
+          <span class="adm-btn ghost">Edit config.toml</span>
+        </div>
+      </div>
+      <figcaption class="cap"><b>Test</b> runs a ten-second fixture end to end and reports what came back, including whether the endpoint honoured <code>prompt</code> and word-level timestamps — the two things an API gateway most often strips, and which glossary biasing and speaker alignment both depend on. Better to find out on a fixture than on a meeting.</figcaption>
+    </figure>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Install</div>
+      <h2>One command, one wizard, one check</h2>
+      <p class="lede">Installing should not require reading any of the above. The installer puts files in place and changes nothing it cannot list; the wizard asks the four questions that have no sensible default; the doctor tells you which of them is wrong.</p>
+    </div>
+
+    <div class="term"><span class="p">$</span> git clone https://github.com/…/munin ~/dev/munin &amp;&amp; ~/dev/munin/install.sh</div>
+
+    <h3 style="margin-top:28px">What the installer does, in order</h3>
+    <div class="tbl-wrap">
+      <table>
+        <thead><tr><th>#</th><th>Step</th><th>Touches</th></tr></thead>
+        <tbody>
+          <tr><td>1</td><td>Check <code>ffmpeg</code>, <code>pipewire</code>, Python 3.12+, <code>uv</code>; offer <code>omarchy pkg add</code> for anything missing</td><td>nothing yet</td></tr>
+          <tr><td>2</td><td>Install the CLI, daemon and worker</td><td><code>~/.local/bin/munin*</code></td></tr>
+          <tr><td>3</td><td>Install and validate the shell plugin</td><td><code>~/.config/omarchy/plugins/local.munin/</code></td></tr>
+          <tr><td>4</td><td>Put the widget in the bar</td><td><code>omarchy bar put local.munin --before omarchy.tray</code></td></tr>
+          <tr><td>5</td><td>Bind the key, unbinding first if Omarchy already owns it</td><td><code>~/.config/hypr/bindings.lua</code> — backed up first</td></tr>
+          <tr><td>6</td><td>Copy the systemd user unit, print the enable command rather than running it</td><td><code>~/.config/systemd/user/munin.service</code></td></tr>
+          <tr><td>7</td><td>Create the data root and a default config</td><td><code>~/munin/</code>, <code>~/munin/config.toml</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:22px">Models are not downloaded here. <code>munin models pull</code> is a separate, explicit 6.2 GB — an installer that silently spends that much of someone's connection is an installer people stop trusting. The wizard offers it at the right moment and the CLI works without it against a remote backend.</p>
+
+    <h3 style="margin-top:30px">Then the wizard</h3>
+    <div class="term"><span class="p">$</span> munin setup
+
+<span class="dim">Where should audio be transcribed?</span>
+  <span class="ok">▸</span> This machine        <span class="dim">RTX 3070 detected · needs 6.2 GB of models</span>
+    Another machine     <span class="dim">over SSH</span>
+    An API endpoint     <span class="dim">OpenAI-compatible</span>
+
+<span class="dim">Downloading models…</span>  nb-whisper-large   <span class="ok">━━━━━━━━━━</span> 3.1 GB
+                   whisper-large-v3   <span class="ok">━━━━━━━━━━</span> 3.1 GB
+                   diarization-3.1    <span class="ok">━━━━━━━━━━</span> 1.0 GB
+
+<span class="dim">Connect Microsoft 365 for meeting titles and attendees?</span>  <span class="ok">yes</span>
+  Open <span class="p">https://microsoft.com/devicelogin</span> and enter  <b>KTRQ-9F2P</b>
+  <span class="ok">✓</span> Signed in · calendar and Teams meetings readable
+
+<span class="dim">Which microphone?</span>
+  <span class="ok">▸</span> Scarlett Solo USB     <span class="dim">default source</span>
+    Built-in analog
+
+<span class="dim">Recording 10 seconds — say something…</span>
+  <span class="ok">✓</span> Track 1 captured   <span class="dim">peak −14 dB, no clipping</span>
+  <span class="ok">✓</span> Track 2 silent     <span class="dim">correct — no meeting is running</span>
+  <span class="ok">✓</span> Transcribed in 4 s <span class="dim">"testing one two three"</span>
+
+<span class="ok">Ready.</span> Join a Teams meeting and Munin will ask.</div>
+
+    <h3 style="margin-top:30px">And a check you can re-run</h3>
+    <div class="term"><span class="p">$</span> munin doctor
+
+  <span class="ok">✓</span> ffmpeg 7.1                      <span class="dim">opus + mp3 encoders present</span>
+  <span class="ok">✓</span> PipeWire 1.2.7                  <span class="dim">2 sources, 3 sinks</span>
+  <span class="wn">!</span> microphone contention           <span class="dim">voxtype.service also holds the default source</span>
+                                    <span class="dim">both read fine here — retest after any PipeWire update</span>
+  <span class="ok">✓</span> shell plugin local.munin        <span class="dim">loaded, bar widget present</span>
+  <span class="ok">✓</span> keybind SUPER + SHIFT + R       <span class="dim">bound to munin toggle</span>
+  <span class="ok">✓</span> munin.service                   <span class="dim">active (running) since 08:12</span>
+  <span class="ok">✓</span> backend local                   <span class="dim">models warm, 6.2 GB resident</span>
+  <span class="ok">✓</span> backend ssh desktop.lan         <span class="dim">reachable, 18 ms</span>
+  <span class="no">✗</span> backend api gateway.internal    <span class="dim">401 — check api_key_cmd</span>
+  <span class="ok">✓</span> Microsoft 365                   <span class="dim">token valid until 2026-10-12</span>
+  <span class="wn">!</span> Teams attendance reports        <span class="dim">403 — tenant admin consent not granted</span>
+                                    <span class="dim">invite list will be used instead</span>
+  <span class="ok">✓</span> ~/munin                         <span class="dim">14 sessions, 2.1 GB, 412 GB free</span>
+
+  <span class="wn">2 warnings, 1 failure.</span> Fallback chain still resolves: local → ssh.</div>
+
+    <p style="margin-top:22px">The doctor is the thing worth building first. Every open question in this document ends up as a line in that output, which turns "is this set up correctly" from an afternoon of checking into one command — and makes a broken install self-describing when you come back to it in six months.</p>
+
+    <div class="aside">
+      <h3>Uninstall is part of install</h3>
+      <p><code>install.sh --uninstall</code> removes the binaries, the plugin, the bar entry, the keybind and the unit, and leaves <code>~/munin/</code> exactly where it is, printing the path. Nothing you recorded is ever removed by an uninstaller.</p>
+    </div>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Build</div>
+      <h2>What the plugin actually is</h2>
+      <p class="lede">Two kinds in one plugin folder: a service that watches and records, a bar widget that renders and asks. The heavy lifting stays in a daemon outside the shell.</p>
+    </div>
+
+    <div class="tree">~/.config/omarchy/plugins/<b>local.munin/</b>
+├── manifest.json        <i>schemaVersion 1, kinds: ["service","bar-widget"]</i>
+├── Service.qml          <i>PipeWire watch, Hyprland titles, notifications, IPC</i>
+├── BarWidget.qml        <i>extends qs.Ui Panel — button + dropdown + IPC target</i>
+├── Model.js             <i>state machine, session list, formatting</i>
+└── components/
+    ├── TrackMeter.qml
+    └── SessionRow.qml
+
+~/munin/config.toml      <i>read by the daemon and the worker, not by the plugin</i>
+~/.local/bin/munin       <i>CLI — what the keybind, the buttons and the wizard all call</i></div>
+
+    <div class="tbl-wrap" style="margin-top:26px">
+      <table>
+        <thead>
+          <tr><th>Concern</th><th>Lives in</th><th>Why there</th></tr>
+        </thead>
+        <tbody>
+          <tr><td>Detect call, prompt, show state</td><td><code>local.munin</code> plugin</td><td>Already has PipeWire, notifications, the bar and hot-reload</td></tr>
+          <tr><td>Capture, encode, spool</td><td><code>munin-rec</code> daemon</td><td>Must survive a shell reload; a crashed bar must never kill a recording</td></tr>
+          <tr><td>Transcribe, diarize, match voices</td><td><code>munin-work</code></td><td>Runs where the GPU is — this machine, one over SSH, or an API for the ASR half</td></tr>
+          <tr><td>Register, review queue, backends</td><td><code>munin admin</code></td><td>Loopback web UI. A register and a fallback chain want a table, not a dropdown</td></tr>
+          <tr><td>Everything scriptable</td><td><code>munin</code> CLI</td><td>The keybind, the notification buttons and the panel all call the same commands</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <p style="margin-top:22px">The plugin talks to the daemon over IPC — <code>omarchy-shell local.munin toggle</code> from the keybind, and the daemon's own socket for state. Validate the folder before enabling it: <code>omarchy plugin validate ~/.config/omarchy/plugins/local.munin</code>.</p>
+  </section>
+
+  <section>
+    <div class="sec-head">
+      <div class="sec-no">Unresolved</div>
+      <h2>Decisions this sketch is waiting on</h2>
+    </div>
+
+    <div class="q">
+      <div class="q-t">Microphone contention with voxtype</div>
+      <div class="q-b">Both daemons want the default source. Needs ten minutes on the hardware to confirm. If PipeWire refuses the second reader, the fix is a mediating capture service both use — a design change, not a tweak.</div>
+    </div>
+    <div class="q">
+      <div class="q-t">Is SUPER+SHIFT+R free?</div>
+      <div class="q-b">Not in the user bindings file, which usually means Omarchy owns it. <code>omarchy menu keybindings --print</code> settles it; if taken, <code>hl.unbind</code> first.</div>
+    </div>
+    <div class="q">
+      <div class="q-t">Does "never for this meeting" persist against the calendar event, the series, or the title?</div>
+      <div class="q-b">A recurring 1:1 you never want recorded should stay unrecorded without asking again. That needs the recurring event id, not the instance.</div>
+    </div>
+    <div class="q">
+      <div class="q-t">How does the SSH backend authenticate unattended?</div>
+      <div class="q-b">The worker runs from a systemd user unit with no terminal, so a passphrase-protected key needs an agent that is already unlocked, or a dedicated key with no passphrase restricted to one command. The second is less elegant and more likely to still work in a year.</div>
+    </div>
+    <div class="q">
+      <div class="q-t">Retention period for audio</div>
+      <div class="q-b">Transcripts are small and worth keeping indefinitely. Audio is 11 MB an hour and its value drops sharply once the transcript is verified. A default of "audio 90 days, transcripts forever" would keep the store bounded without losing anything you reach for.</div>
+    </div>
+    <div class="q">
+      <div class="q-t">Does the register survive a model upgrade?</div>
+      <div class="q-b">Embeddings are specific to the model that produced them, so changing the embedder invalidates every profile at once. Re-embedding from retained samples is the way out, which is an argument for keeping enrolment clips rather than only the centroid.</div>
+    </div>
+  </section>
+
+  <div class="foot">
+    <span>Munin — sketch, not implementation</span>
+    <span>Omarchy 4.0.0.alpha · Quickshell</span>
+    <span>All meeting titles and names synthetic</span>
+  </div>
+
+</div>
+
+</body>
+</html>

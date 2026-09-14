@@ -2,8 +2,11 @@
 
 **Status:** Design, pending approval
 **Date:** 2026-09-14
+**Revised:** 2026-09-14 — Teams-first scope, voice register, transcription
+backends, install flow. Open questions 4, 5 and 6 answered on the machine.
 **Owner:** Simen Sollie
-**Feeds:** `pensieve` (`~/pensieve/raw/`)
+**Store:** `~/munin/` · also feeds `pensieve` (`~/pensieve/raw/`)
+**Sketches:** [`../../design/munin-plugin-sketches.html`](../../design/munin-plugin-sketches.html)
 
 > Public copy. Customer names, colleague names and internal project references
 > have been replaced with generic descriptors. Counts and measurements are
@@ -35,11 +38,15 @@ second customer name appears zero times in 756,000 words.
 
 ## 2. Goals
 
-- Record digital meetings on Linux and macOS with no manual steps.
-- Produce transcripts in `pensieve/raw/` that are at least as good as Plaud's,
-  and materially better on domain vocabulary.
+- Record digital meetings on Linux and macOS with one confirmation and no other
+  manual steps.
+- Produce transcripts at least as good as Plaud's, and materially better on
+  domain vocabulary.
+- Keep speaker names consistent across meetings, including ad-hoc calls the
+  calendar never knew about.
 - Keep customer meeting audio on infrastructure under our control.
 - Survive any single machine being offline.
+- Be installable and verifiable in one command each (§15).
 
 ## 3. Non-goals
 
@@ -47,8 +54,10 @@ second customer name appears zero times in 756,000 words.
 - **Real-time captions.** This is a batch pipeline.
 - **Replacing Plaud's AI summaries.** `pensieve` ingest does its own distillation
   with Claude and never consumes Plaud's `Summary.md`.
-- **A GUI.** Daemon plus CLI.
-- **Voice enrollment / speaker identification from voiceprints.** See §10.
+- **A general GUI.** Daemon plus CLI. Two exceptions: the Omarchy bar plugin
+  (§9.2) and a loopback admin surface for the voice register and backends (§9.5).
+- **Real-time speaker identification.** Voice matching runs in the worker after
+  capture, never during the meeting.
 
 ## 4. Constraints and settled decisions
 
@@ -56,37 +65,46 @@ second customer name appears zero times in 756,000 words.
 |---|---|---|
 | D1 | Digital meetings only | User scope decision; also puts diarization in its best acoustic regime (§7.4) |
 | D2 | Two-track capture: own mic separate from application audio | Makes self-attribution exact with no model involved (§7.4) |
-| D3 | Pluggable sink; recorder never knows who transcribes | Lets the worker live on a different machine, and lets the backend change without touching capture |
+| D3 | Pluggable backend; recorder never knows who transcribes | Lets the worker live on a different machine, and lets the backend change without touching capture (§8) |
 | D4 | **Suggest, never auto-record.** Trigger on meeting-app audio; calendar is enrichment only | A recorder that asks is defensible (§12); app audio detects ad-hoc calls the calendar never knew about |
 | D5 | Self-hosted Whisper, not Plaud upload | Plaud upload is only reachable via an undocumented consumer endpoint in a different auth realm (Appendix A) |
 | D6 | Two ASR models, routed by detected language | Corpus is 112 English-dominant vs 92 Norwegian-dominant files |
 | D7 | Output timestamps become `HH:MM:SS` | Deliberate break from Plaud's `MM:SS`, which produces `[103:06 - 103:07]` on long meetings |
 | D8 | Glossary is generated, not hand-maintained | Sources already exist (§7.3); a hand-list would rot |
-| D9 | ASR may be remote, diarization is always local | `/v1/audio/transcriptions` has no speaker field (§8.2) |
+| D9 | ASR may be remote; diarization and voice matching are always local | `/v1/audio/transcriptions` has no speaker field (§8.1) |
 | D10 | Recording state is always visible in the bar | Consent and self-awareness; also the only reliable stop control |
 | D11 | Mixed audio is retained for manual Plaud upload | Plaud summaries stay available as a separate, opt-in process (§10) |
 | D12 | Scripts use a `munin-` prefix, never `omarchy-` | Graphical-session PATH puts `/usr/share/omarchy/bin` first, so an `omarchy-*` override from `~/.local/bin` silently loses |
+| D13 | Teams first; other platforms are configuration, not code | Identity and activity are detected separately (§6.3), so Zoom, Meet and Slack are rows in a table rather than new code paths |
+| D14 | Auto-stop always notifies | A recording that stops silently is indistinguishable from a crash. The notification carries a Resume action (§6.3) |
+| D15 | Resume inside 10 minutes continues the same session | A meeting that broke and came back is one meeting. Past the window, a new session (§6.3) |
+| D16 | Voice register holds a name and an embedding, nothing more | Speaker names stay consistent across meetings, including ad-hoc calls with no invite (§7.4) |
+| D17 | Naming a speaker and enrolling a voice are separate actions | A small register matches better than a large one: every profile is another candidate the matcher must discriminate against |
+| D18 | All Munin data lives under `~/munin/` | One named root, so a directory in `$HOME` says what it is and what put it there (§7.5) |
+| D19 | Three transcription backends — `local`, `ssh`, `api` — in an ordered fallback chain | One interface covers a GPU desktop, a headless mini PC and a shared gateway (§8) |
+| D20 | The shell plugin never captures | A shell hot-reload or crash must never kill a recording; capture lives in a systemd daemon (§9.1) |
 
 ## 5. Architecture
 
 ```
-  DETECT                CAPTURE                 SPOOL              SINK
+  DETECT                CAPTURE                 SPOOL             BACKEND
 ┌──────────────┐   ┌──────────────────┐   ┌──────────────┐   ┌──────────────────┐
-│ app holds    │   │ Linux: PipeWire  │   │ <session>/   │   │ A. 3070  (CUDA)  │
-│ sink-input   │──▶│  t1 = mic        │──▶│   mic.opus   │──▶│ B. cluster       │
-│ AND mic      │ ▲ │  t2 = app sink   │   │   app.opus   │   │    (LiteLLM)     │
-│ capture      │ │ │ macOS: BlackHole │   │   mixed.mp3  │   │ C. mini PC (Arc) │
-└──────┬───────┘ │ │  (phase 2)       │   │   meta.json  │   └────────┬─────────┘
-       │         │ └──────────────────┘   │   state      │            │
-       ▼         │                        └──────┬───────┘   ASR remote-or-local
-  notification   │                               │           diarization ALWAYS local
-  + bar glyph    │                               │                    │
-       │         │                               ▼                    ▼
-       └─ user ──┘                       munin export      pensieve/raw/<title>-transcript.txt
-          says yes                       (manual Plaud upload)
+│ process holds│   │ Linux: PipeWire  │   │ <session>/   │   │ 1. local  (CUDA) │
+│ playback AND │──▶│  t1 = mic        │──▶│   mic.opus   │──▶│ 2. ssh    (LAN)  │
+│ capture      │ ▲ │  t2 = app sink   │   │   app.opus   │   │ 3. api    (HTTP) │
+│      AND     │ │ │ macOS: BlackHole │   │   mixed.mp3  │   │  ordered chain   │
+│ it is Teams  │ │ │  (phase 2)       │   │  session.json│   └────────┬─────────┘
+└──────┬───────┘ │ └──────────────────┘   └──────┬───────┘            │
+       │         │                               │           ASR remote-or-local
+       ▼         │                               │           diarization ALWAYS local
+  notification   │                               │           voice match ALWAYS local
+  + bar glyph    │                               ▼                    │
+       │         │                    ~/munin/recordings/…            │
+       └─ user ──┘                               │                    ▼
+          says yes                               └──▶ pensieve/raw/<title>-transcript.txt
                                     ▲
-                        M365 calendar: enrichment only
-                        (title, attendees, agenda) — never a trigger
+                        M365: title, attendees, agenda — enrichment only,
+                        never a trigger.  Voice register: names, locally.
 ```
 
 Three processes, deliberately separable:
@@ -97,7 +115,11 @@ Three processes, deliberately separable:
   writes the transcript. Runs where the compute is. May call a remote ASR
   endpoint but always diarizes locally.
 - **`munin`** — CLI. `start`, `stop`, `toggle`, `status`, `list`, `retry`,
-  `sinks`, `export`, `glossary`.
+  `voice`, `review`, `export`, `glossary`, `models`, `setup`, `doctor`.
+- **`munin admin`** — loopback web surface for the register, review queue,
+  sessions and backends (§9.5).
+- **`local.munin`** — the Omarchy shell plugin: detects, prompts, renders. Never
+  captures (§9.2).
 
 ## 6. Capture
 
@@ -125,25 +147,52 @@ device or ScreenCaptureKit. Deferred: the MacBook still has Plaud today, so this
 is not on the critical path. The capture interface is designed so this slots in
 without touching anything else.
 
-### 6.3 Trigger and consent
+### 6.3 Trigger and confirmation
 
 **Detection, not automation.** The daemon never starts recording on its own.
 
-The signal that a call is in progress is an application holding **both** a
-sink-input and a microphone capture stream at the same time. This single
-condition removes the entire false-positive class: a browser playing video has
-the first but not the second. Matched applications are configurable; the default
-list is Teams, Chrome/Chromium, Slack, Zoom.
+Detection is two independent conditions, and keeping them independent is what
+makes other platforms configuration rather than code:
 
-On detection, munin sends a notification via Omarchy's wrapper:
+1. **A call is live.** One process holds a playback stream *and* a capture
+   stream at the same time. This single condition removes the entire
+   false-positive class: a browser playing video has the first but not the
+   second. Read from `Quickshell.Services.Pipewire` inside the plugin, so there
+   is no `pw-dump` polling.
+2. **It is Teams.** Teams arrives in three shapes, and only one of them
+   identifies itself to PipeWire:
 
-```bash
-munin-notify() { omarchy-notification-send -g 🎙 "Meeting detected: $1 — SUPER+SHIFT+R to record"; }
-```
+| Shape | PipeWire reports | Window reports | Identified by |
+|---|---|---|---|
+| Native `teams-for-linux` | `application.name` = Teams | class `teams-for-linux` | PipeWire alone |
+| Installed PWA | `Chromium` | class `chrome-teams.microsoft.com__-Default` | Window class |
+| Browser tab | `Chromium` | title contains `Microsoft Teams` | Window title |
 
-Notification *actions* (clickable buttons) are not assumed. Whether the Omarchy 4
-Quickshell notification daemon supports them is unverified (Appendix D), so the
-controls are the keybind and the bar module, both of which work regardless.
+Match the PipeWire client first, since the native app is unambiguous and costs
+nothing, then fall back to the Hyprland window owning that stream's PID and test
+class, then title. Adding Zoom, Meet or Slack later is a row in that table;
+condition 1 is already true for all of them.
+
+**Three notifications, no more.** The Omarchy 4 notification daemon sets
+`actionsSupported: true` (Appendix D), so each carries real buttons. The keybind
+and the bar module work regardless, and are offered alongside rather than
+instead — a notification can be missed, a keybind cannot.
+
+| When | Says | Actions |
+|---|---|---|
+| Call detected | Meeting detected, with title and attendee count from the calendar | Record · Not this one · Never for this meeting |
+| Streams gone 1 min | Meeting looks finished, stops by itself at 2:00 | Stop and transcribe · Keep recording |
+| Auto-stopped | Recording stopped, *n* min captured, transcribing now | Resume · Open session |
+
+The asymmetry is deliberate. Starting requires an explicit yes; stopping happens
+on a timer if nothing is said. A missed start prompt costs one recording; a
+missed stop prompt would record the rest of the afternoon.
+
+**Resume continues, it does not restart** (D15). Resuming within 10 minutes
+reopens the same session directory and writes `mic.002.opus` alongside the first
+pair; `session.json` carries a `segments[]` list and the worker concatenates them
+into one transcript with a gap marker. Past the window, a resume starts a fresh
+session.
 
 **Ad-hoc recording is a first-class path**, not a fallback:
 
@@ -153,15 +202,12 @@ munin stop
 munin status
 ```
 
-**Calendar is enrichment only.** Once a session exists, munin matches it against
-M365 calendar events by time overlap to fill in the real title, attendee list and
-agenda. No match means an ad-hoc call: the title falls back to a prompt, then to
-a timestamp. The calendar never starts or stops anything.
+**Calendar is enrichment only** (§7.6). No match means an ad-hoc call: the title
+falls back to a prompt, then to a timestamp. The calendar never starts or stops
+anything.
 
-Auto-stop when the application's streams have been gone for 2 minutes, with a
-notification. Recording inhibits idle/lock for its duration (`shell.json` sets
-screensaver at 150 s and lock at 300 s, which would otherwise fire mid-meeting).
-
+Recording inhibits idle/lock for its duration (`shell.json` sets screensaver at
+150 s and lock at 300 s, which would otherwise fire mid-meeting).
 ## 7. Pipeline
 
 ### 7.1 Language routing
@@ -210,8 +256,58 @@ tokens, compare against the canonical list, propose mappings. Edit distance alon
 will not find a Norwegian common noun substituted for an English product name,
 because that is a phonetic collision in a Norwegian mouth rather than a typo.
 This is therefore a batch job for Claude over the frequency-ranked
-unknown-token list, human-reviewed once, then topped up
-after each run. Output is a reviewed `glossary.toml` under version control.
+unknown-token list, human-reviewed once, then topped up after each run.
+
+#### 7.3.1 `glossary.toml`
+
+The output is a single file at `~/munin/glossary.toml` that the user owns and
+can edit by hand. `munin glossary build` regenerates it, but any entry a human
+has touched is marked `reviewed = true` and is never overwritten — the generator
+adds and proposes, it does not overrule.
+
+A complete annotated example is in
+[`examples/glossary.toml`](../../../examples/glossary.toml), built to mirror the
+damage classes documented in Appendix B. The schema:
+
+| Key | On | Meaning |
+|---|---|---|
+| `canonical` | `[[term]]` | The correct spelling. This is what goes in the prompt and what appears in transcripts |
+| `kind` | `[[term]]` | `product`, `customer`, `person`, `standard`, `domain`, `tool` |
+| `weight` | `[[term]]` | 0-100. Decides who makes the `prompt_budget_terms` cut when the budget is tight |
+| `languages` | `[[term]]` | Which language routes bias this term (§7.1) |
+| `corrections` | `[[term]]` | Wrong forms observed in the corpus, mapped to `canonical` |
+| `action` | `[[term]]` | `always` replace, `review` by LLM, or `never` — record only |
+| `domains` | `[[term]]` | Attendee email domains that promote this term |
+| `email` | `[[term]]` | For `kind = "person"`; also feeds tier 3 speaker assignment (§7.4) |
+| `text` | `[[protect]]` | A string that is never rewritten and never offered as a correction target |
+| `when_attendee_domain` / `when_title_matches` | `[[context]]` | Match condition for promoting terms into this meeting's prompt |
+| `promote` | `[[context]]` | Canonical terms to move to the front of the queue when the condition matches |
+
+Three parts of that schema exist because blind replacement is dangerous:
+
+- **`action = "review"`** for corrections that are also real words. `ISO 2700`
+  may be a truncated `ISO 27001` or a mangled `ISO 42001`; a deterministic rule
+  cannot tell, and guessing wrong in an audit transcript is worse than leaving
+  it.
+- **`[[protect]]`** for correct-but-unusual words that a rule would otherwise
+  swallow. The surname `Havik` sits one edit away from `avvik`, which has 53
+  corrections attached to it.
+- **`[[context]]`** so the 40-term budget is spent on the customer actually in
+  the meeting rather than split across every customer in the register.
+
+`munin glossary` subcommands:
+
+```
+munin glossary build            # regenerate, preserving reviewed entries
+munin glossary review           # walk unreviewed proposals, one by one
+munin glossary lint             # unreachable rules, collisions, protect conflicts
+munin glossary test <session>   # show what would change in an existing transcript
+```
+
+`lint` is the one to run after hand-editing: it catches a `corrections` entry
+that is also a `canonical` elsewhere, a `[[protect]]` string that some rule
+would have rewritten, and rules that can never fire because an earlier one
+consumes the same text.
 
 **Injection is two-stage, because `initial_prompt` is capped at 224 tokens**
 (half of Whisper's 448-token decoder context; anything longer is silently
@@ -226,28 +322,91 @@ Stage 2 is where the acceptance criteria in §13 are actually met.
 
 ### 7.4 Speaker attribution
 
-Three tiers, in order:
+Four tiers, in order. Each is only consulted when the one above it does not
+answer.
 
-1. **You are exact.** Track 1 is your microphone. Every segment with energy on
-   track 1 and not on track 2 is you, by construction. No model, no error.
-2. **Everyone else is diarized** on track 2 with pyannote, producing
-   `SPEAKER_00`, `SPEAKER_01` and so on.
-3. **Labels are assigned closed-set** against the calendar attendee list. The
-   question is never "who is this out of everyone", only "which of these four",
-   which is a far easier problem than the open-set task pyannote is benchmarked
-   on. Where the assignment is not confident, the positional label is kept.
+| Tier | Method | Error |
+|---|---|---|
+| 1 · You | Energy on track 1 and not on track 2 | None. True by construction — no model involved |
+| 2 · Enrolled | Embedding match against the voice register, above threshold | Low and measurable; confidence is stored per segment |
+| 3 · Invited | Closed-set assignment against the calendar attendee list | Moderate. "Which of these four", not "who is this" |
+| 4 · Unknown | Positional label kept: `SPEAKER_02` | Honest. Better a positional label than a confident wrong name |
 
-Digital-only capture helps here: Teams and Meet audio is per-participant headset
+Digital-only capture helps tiers 2 and 3: Teams audio is per-participant headset
 mics, already noise-suppressed and echo-cancelled upstream. That is the
 AMI-headset acoustic condition (pyannote ~12-14% DER) rather than the far-field
 single-room-mic condition where DER degrades badly.
 
-Explicitly not doing voice enrollment. See §12.
+**The voice register** (§7.4.1) is what makes tier 2 possible, and is the reason
+a speaker keeps the same name in an ad-hoc call with no invite, in a meeting
+where the attendee list is wrong, and in a transcript written six months later.
 
-### 7.5 Output
+#### 7.4.1 Voice register
 
-Written to `pensieve/raw/<sanitised calendar title>-transcript.txt`, matching the
-existing convention (`:` and `/` replaced with `_`).
+A profile is a name and an embedding. Nothing else is required and nothing else
+is stored:
+
+| Field | Holds |
+|---|---|
+| `name` | What appears in transcripts |
+| `email` | Optional; links to the M365 identity for invite matching |
+| `embedding` | Centroid plus per-sample vectors |
+| `model` | e.g. `ecapa-tdnn@1.0` — embeddings mean nothing to a different model |
+| `samples` | The enrolment clips and which sessions they came from |
+| `accuracy` | Rolling mean confidence over recent matches |
+| `status` | `active` or `disabled` |
+
+Stored as one JSON file per person under `~/munin/voices/`, local to the machine.
+
+**Naming and enrolling are separate actions** (D17). Naming assigns a label to
+one transcript and stores nothing. Enrolling writes a profile so the person is
+recognised from then on. Keeping them apart is what keeps the register small
+enough to stay accurate — every profile is another candidate the matcher must
+discriminate against, so six good profiles beat sixty thin ones. `accuracy` is
+the field that surfaces this: a profile built from one short clip will quietly
+mislabel people, and a rolling 0.68 says so before the transcripts do.
+
+**Retain the enrolment clips, not only the centroid.** Changing the embedding
+model invalidates every profile at once; retained clips turn that from
+re-enrolling everyone into `munin voice reembed --all`.
+
+Enrolment happens from the review queue (§9.5), where a cluster has just been
+identified — which is also the best available sample. Nothing is enrolled
+automatically, and a cluster under roughly 30 seconds offers no enrolment at all,
+being too thin to build a profile that matches reliably.
+### 7.5 Output and storage
+
+All Munin data lives under `~/munin/` (D18). One named root, so a directory in
+`$HOME` says what it is and what put it there.
+
+```
+~/munin/
+├── recordings/2026/09/2026-09-14T1325-weekly-quality-sync/
+│   ├── session.json      state, title, source, calendar id, segments, checksums
+│   ├── mic.opus          track 1 — you, 24 kbps mono
+│   ├── app.opus          track 2 — everyone else
+│   ├── mixed.mp3         64 kbps, for manual Plaud upload (§10)
+│   ├── transcript.txt    [HH:MM:SS - HH:MM:SS] Speaker: text
+│   ├── transcript.json   word timings, confidences, speaker turns
+│   └── markers.json      anything marked during the meeting
+├── by-title/             symlinks, regenerated on write
+├── by-participant/       symlinks, calendar-matched sessions only
+├── inbox/                captured, not yet transcribed
+├── voices/               the register (§7.4.1), plus samples/
+├── config.toml           backends, detection, paths (§8)
+├── glossary.toml         domain vocabulary and corrections (§7.3.1)
+├── munin.log
+└── latest -> recordings/2026/09/…
+```
+
+Two properties are the point: the directory name alone says when and what without
+opening anything, and `grep -r` searches every transcript with no index to
+maintain. `session.json` is the only file the worker writes state into, so a
+half-finished session is always identifiable after a crash.
+
+A copy of `transcript.txt` is also written to `pensieve/raw/<sanitised calendar
+title>-transcript.txt`, matching the existing convention (`:` and `/` replaced
+with `_`), so `pensieve` ingest is unchanged.
 
 ```
 [00:00:08 - 00:00:17] Ola Nordmann: ...
@@ -261,66 +420,93 @@ Changes from Plaud's format, each deliberate:
 - Strictly monotonic segments. 52 segments across 35 existing files start before
   the previous one ended, and 5 have negative duration.
 - Stable speaker labels. The corpus uses a bare first name for the same person
-  in April files and the full display name from May onward; munin always uses
-  the calendar's display name.
+  in April files and the full display name from May onward; munin uses the voice
+  register (§7.4.1) first and the calendar display name second.
 
-A sidecar `<name>-transcript.json` carries word-level timestamps and confidences
-for anything that later wants them. The `.txt` stays the source of record, as
-`pensieve/CLAUDE.md` specifies.
+### 7.6 Microsoft 365 enrichment
 
-## 8. Deployment
+The calendar never starts a recording (D4). It answers what a recording cannot
+answer for itself.
 
-### 8.1 Sinks
+| Pulled | From | Used for |
+|---|---|---|
+| Subject, start, end, organiser | Outlook calendar event | Session title and directory name, replacing the timestamp fallback |
+| Attendees and response status | Outlook calendar event | The closed set for tier 3 assignment (§7.4) |
+| Body / agenda text | Outlook calendar event | Decode-time glossary bias (§7.3 stage 1). An invite naming a customer promotes that customer's vocabulary |
+| Recurring series id | Outlook calendar event | Makes "never record this meeting" stick to the series rather than one instance |
+| Actual join / leave times | Teams attendance report | Narrows the candidate set per segment rather than per meeting |
 
-Three sinks, same models, different runtime. The recorder is identical in all
-three.
+Sessions match events by time overlap. **The attendance report is an upgrade, not
+a dependency:** Graph gates online-meeting artifacts behind tenant-admin consent
+rather than user consent, so assume the invite list is what you get and request
+the report separately. This answers open question 4.
+## 8. Transcription backends
 
-| | **A: home desktop** | **B: shared cluster via LiteLLM** | **C: mini PC fallback** |
+Three backends satisfy one interface, ordered into a fallback chain in
+`~/munin/config.toml` (D19). The recorder is identical in all three.
+
+| Backend | Runs on | 60-min meeting | Suits |
 |---|---|---|---|
-| Hardware | RTX 3070, 8 GB | Apple silicon node (spec TBC) | Intel Arc 140T iGPU |
-| Runtime | faster-whisper (CTranslate2 + CUDA) | whisper.cpp Metal or mlx-whisper behind LiteLLM | whisper.cpp Vulkan |
-| Model artifact | CTranslate2 | GGML or MLX | GGML |
-| Interface | in-process | `POST /v1/audio/transcriptions` | in-process |
-| Diarization on | CUDA | **local** (see 8.2) | CPU |
-| 60-min meeting | ~5-8 min (est.) | ~5-6 min (est.) | ~30-40 min (est.) |
-| Available | when desktop is on | datacenter uptime | always |
+| `local` | This machine — faster-whisper on CUDA, whisper.cpp on Vulkan | ~5-8 min on a 3070, ~30-40 min on an Intel Arc iGPU (est.) | The desktop. No network, no dependency on another machine being awake |
+| `ssh` | Another machine you own; audio pushed, transcript pulled back | ~5-8 min plus ~20 s transfer (est.) | The mini PC records, the desktop transcribes. 11 MB of Opus makes transfer irrelevant |
+| `api` | Any OpenAI-audio-compatible endpoint, gateway or hosted | ~5-6 min (est.) | A shared cluster, or borrowing capacity you do not own |
+
+```toml
+[transcribe]
+backend  = "local"
+fallback = ["ssh", "api"]     # tried in order; session stays spooled if none answer
+
+[transcribe.local]
+device = "cuda"               # cuda | vulkan | cpu
+model_no = "NbAiLab/nb-whisper-large"
+model_en = "openai/whisper-large-v3"
+keep_warm = true              # both resident: load dominates inference at this volume
+
+[transcribe.ssh]
+host = "desktop.lan"
+remote_bin = "~/.local/bin/munin"
+transport = "rsync"
+
+[transcribe.api]
+endpoint = "https://gateway.internal/v1/audio/transcriptions"
+api_key_cmd = "secret-tool lookup service munin-api"   # never the key itself
+
+[diarize]
+device = "cuda"               # always local, whatever the ASR backend
+```
 
 CTranslate2 has no Metal backend (`device="mps"` raises `ValueError: unsupported
-device mps`), which is why B is a different artifact rather than the same one.
+device mps`), so an Apple-silicon machine is reached as `api` (whisper.cpp Metal
+or mlx-whisper behind a gateway) rather than as `local`.
 
-**Order of implementation: A first**, because it is unblocked. B when the
-cluster proposal is approved (§12). C is the floor, so a meeting is never lost
-because two machines are unreachable.
+**Order of implementation: `local` first**, because it is unblocked. `ssh` next,
+because it is the availability floor — until it exists, every meeting depends on
+one desktop being powered on. `api` last, when the cluster proposal is approved
+(§12).
 
 Load is trivially small in all cases: median meeting 28 minutes, roughly 1.4
-meetings per day across the existing corpus. Even three meetings on a heavy day
-is ~90 minutes of audio, under 10 minutes of GPU time on A or B.
+meetings per day across the existing corpus.
 
-### 8.2 LiteLLM changes the shape of sink B
+### 8.1 The API backend splits the pipeline
 
-The cluster exposes models through a LiteLLM gateway, so sink B is a thin HTTP
-client rather than a bespoke service. Model selection is a string
-(`nb-whisper-large`, `whisper-large-v3`), which means §7.1's language routing
-becomes a choice of `model` parameter and nothing else.
-
-**The consequence: the pipeline splits.** The OpenAI audio API returns text and
-optionally word timestamps. It has no speaker field, so pyannote cannot live
-behind the gateway. Diarization therefore always runs locally, on the mini PC CPU
-or the 3070, regardless of where ASR happens. This is acceptable because
+The OpenAI audio API returns text and optionally word timestamps. It has no
+speaker field, so diarization and voice matching cannot live behind a gateway and
+**always run locally**, whatever produced the words. This is acceptable because
 diarization is the cheaper half and track 1 already provides self-attribution for
-free (§7.4).
+free (§7.4) — but it means `api` is not a way to run Munin on a machine with no
+compute at all.
 
-Two capabilities to confirm with IT before committing to B:
+Two capabilities decide whether a given endpoint is usable, and `munin doctor`
+(§15) tests both against a fixture rather than against a meeting:
 
-- Does the gateway pass through **`prompt`**? Required for §7.3 stage 1. Without
-  it, glossary biasing is lost and only post-correction remains.
+- Does it pass through **`prompt`**? Required for §7.3 stage 1. Without it,
+  glossary biasing is lost and only post-correction remains.
 - Does it pass through **`timestamp_granularities[]=word`** with
   `response_format=verbose_json`? Required to align ASR output with diarization
   turns.
 
 If either is missing, the fallback is a direct connection to the whisper server
-behind the gateway, bypassing LiteLLM for this one workload.
-
+behind the gateway, bypassing it for this one workload.
 ## 9. Desktop integration (Omarchy)
 
 Conventions read from `~/dev/dotfiles/omarchy`; see Appendix D for what is
@@ -355,39 +541,55 @@ Enablement is never committed, per the dotfiles README.
 `o.launch_on_start` is the alternative but has no restart or lifecycle control,
 so systemd is the right choice here.
 
-### 9.2 Bar indicator
+### 9.2 The shell plugin
 
-**Omarchy 4 does not use Waybar.** The bar is Quickshell, configured in
-`~/.config/omarchy/shell.json` with modules referenced by id and an empty
-`"plugins": []` extension point. That plugin schema is undocumented in the
-dotfiles repo and must be read on the machine (`omarchy bar --help`,
-`/usr/share/omarchy`) before this section can be finalised. See open question 5.
+**Open question 5 is answered.** Omarchy 4 has a real plugin system, not an
+undocumented `plugins` array. Plugins live in `~/.config/omarchy/plugins/<id>/`
+as a `manifest.json` plus QML, are discovered at startup, hot-reload on save, and
+are validated with `omarchy plugin validate <folder>`. Declared `kinds` include
+`bar-widget`, `service`, `panel`, `overlay` and `bar`.
 
-What the indicator must show regardless of mechanism:
+Munin ships one plugin, `local.munin`, with two kinds:
 
-| State | Glyph | Meaning |
+```
+~/.config/omarchy/plugins/local.munin/
+├── manifest.json     schemaVersion 1, kinds: ["service", "bar-widget"]
+├── Service.qml       PipeWire watch, window titles, notifications, IPC
+├── BarWidget.qml     extends qs.Ui Panel — bar button, dropdown, IPC target
+├── Model.js          state machine, session list, formatting
+└── components/       TrackMeter.qml, SessionRow.qml
+```
+
+Three findings shape this:
+
+- **`Quickshell.Services.Pipewire` is available inside QML** — nodes, streams,
+  `isSink`, `isStream`. Detection (§6.3) needs no `pw-dump` polling.
+- **`qs.Ui`'s `Panel` base** gives the bar button, the popup lifecycle and an
+  `IpcHandler` with `open`/`close`/`toggle` for free. `omarchy.audio` is the
+  model to follow; `PanelHero`, `PanelSectionHeader`, `PanelSlider` and
+  `PanelSeparator` are the house components.
+- **`bar/indicators/ScreenRecording.qml` is the precedent** for a recording
+  indicator, down to the glyph (`󰻂`, U+F0EC2) and the process-probe idiom.
+
+**The plugin never captures** (D20). A shell hot-reload or crash must never kill
+a recording, so the plugin detects, prompts and renders while `munin-rec`
+captures.
+
+Placement: `omarchy bar put local.munin --before omarchy.tray`, which writes
+`shell.json` and hot-reloads. Note that `shell.json` is deployed as a copy, never
+a symlink, because `omarchy-shell-config` writes with an atomic rename.
+
+States rendered, one at a time:
+
+| State | Shows | Meaning |
 |---|---|---|
-| idle | (hidden) | not recording |
-| detected | 🎙 dim | a call is in progress, munin is not recording |
-| recording | ● red + elapsed | capturing |
-| transcribing | ⟳ | queued or in flight to a sink |
-| failed | ! | needs attention |
-
-Click toggles start/stop. The recording state must be **visible at a glance**,
-which is the point of D10: you should never be unsure whether you are recording.
-
-The pre-Omarchy-4 Waybar precedent in git history (`custom/voxtype`,
-`custom/screenrecording-indicator`) shows the house idiom for this kind of
-indicator: a script emitting status JSON, refreshed by `SIGRTMIN+n` signal on
-state change rather than polled on an interval. Munin should be signal- or
-event-driven for the same reason: recording state changes rarely and must
-update instantly.
-
-**Operational caveat:** `shell.json` is deployed as a copy, not a symlink,
-because `omarchy-shell-config` writes via atomic rename. Any bar change is made
-with `omarchy bar ...` or by editing the live file, then copied back into the
-dotfiles repo by hand.
-
+| idle | (hidden) | No call |
+| detected | dim mic glyph | A call is live, Munin is not recording |
+| recording | red dot, pulsing, elapsed | Capturing |
+| ending | red dot, steady, elapsed | Streams gone, grace period running |
+| transcribing | ⟳ with queue depth | Captured and safe; worker running or waiting |
+| done | ✓ for 30 s | Transcript landed |
+| failed | ! until acknowledged | Audio retained; a failure that hides itself is a lost meeting |
 ### 9.3 Keybinding
 
 In `~/.config/hypr/bindings.lua`, following the existing idiom and unbinding
@@ -413,6 +615,38 @@ before any code, state under `${XDG_CACHE_HOME:-$HOME/.cache}/munin`.
 `/usr/share/omarchy/bin` ahead of `~/.local/bin`, so an `omarchy-*` script in a
 user directory silently loses to the packaged one, even though the login-shell
 PATH is ordered the other way and makes it look like it works.
+
+### 9.5 Admin surface
+
+A local tool, `munin admin`, bound to loopback. The bar panel links to it and
+never embeds it: a register and a fallback chain want a table, not a dropdown.
+
+| Tab | Holds |
+|---|---|
+| Voices | The register (§7.4.1): person, status, samples, match confidence, meetings heard in, last heard. Add sample, rename, disable, re-embed, delete |
+| Review | Unnamed diarization clusters from recent sessions, with enough audio and text to recognise who it was. Naming one re-renders that transcript in place |
+| Sessions | Every session, its state, and a retry for anything failed |
+| Transcription | The backends (§8), their order, reachability, and a Test that runs a ten-second fixture end to end |
+| Settings | Detection matches, grace period, resume window, paths |
+
+The same actions exist on the CLI, and the CLI is what the keybind, the
+notification buttons and the panel all call:
+
+```
+munin voice list
+munin voice enrol "Ola Nordmann" --from <session> --speaker 2
+munin voice add-sample ola --from <session> --speaker 1
+munin voice rename ola "Ola Nordmann"
+munin voice disable ola
+munin voice delete ola
+munin voice reembed --all
+munin review
+munin glossary build | review | lint | test <session>
+```
+
+`munin voice reembed --all` is why enrolment clips are retained (§7.4.1): a
+change of embedding model otherwise means re-enrolling every person by hand.
+
 
 ## 10. Plaud export (manual, opt-in)
 
@@ -457,26 +691,34 @@ retention pass handles cleanup (§10).
 
 ## 12. Compliance and privacy
 
-This records identifiable people, including customers, in a regulated context. Flagging explicitly rather than burying it:
+This records identifiable people, including customers, in a regulated context.
+Flagging explicitly rather than burying it:
 
 - **Audio and transcripts are personal data under GDPR.** Self-hosting improves
-  the story (no external processor) but does not remove the obligation. A basis
-  and a retention period are needed, not implied.
-- **Participants should know.** Recording a meeting you are in is one thing;
-  retaining transcripts of others' speech indefinitely on company infrastructure
-  is a processing activity that should be disclosed.
-- **No voice enrollment.** Voiceprints used to identify a person are biometric
-  data and a special category under GDPR Article 9, a materially higher bar than
-  transcripts. The tiered attribution in §7.4 gets most of the benefit without
-  holding them. Revisit only as a deliberate, consented, documented change.
-- **The internal cluster proposal scopes testing to synthetic data only, no
-  real customer content.** Deployment B sits outside that scope and needs its
-  own section in that proposal, not a footnote.
+  the story — no external processor, nothing leaving the machine — but does not
+  remove the obligation. A basis and a retention period are needed, not implied.
+- **The voice register is local and minimal by design** (§7.4.1). It holds a name
+  and an embedding, on this machine, and nothing is transferred. Under EU and
+  Norwegian law a stored voiceprint used to identify a person is a special
+  category of personal data, so the register is worth naming explicitly in
+  whatever record of processing covers this tool, and worth keeping small — which
+  D17 already pushes towards for accuracy reasons.
+- **Retention is the open decision, not collection.** Transcripts are small and
+  worth keeping; audio is ~11 MB an hour and its value drops sharply once the
+  transcript is verified. A default of audio 90 days, transcripts indefinitely
+  keeps the store bounded without losing anything reached for in practice.
+- **Recording is always confirmed** (D4) and **always visible** (D10), and
+  auto-stop announces itself (D14). That combination is what makes the tool
+  defensible to the people in the meeting.
+- **The internal cluster proposal scopes testing to synthetic data only, no real
+  customer content.** The `api` backend sits outside that scope and needs its own
+  section in that proposal, not a footnote.
 - **ISO 27001.** A transcript store accumulating customer commercial detail is a
   new asset with its own access control and retention requirements.
 - **Personal vault, work content.** `pensieve` is personal; transcripts of
   customer meetings are arguably company records. Worth a deliberate decision on
   where the authoritative copy lives.
+
 
 ## 13. Testing
 
@@ -492,30 +734,89 @@ This records identifiable people, including customers, in a regulated context. F
   measure DER against hand-labelled references.
 - **Output**: assert monotonic timestamps, format conformance, and that the
   filename matches `pensieve`'s convention.
-- **Sinks**: the same fixture through A, B and C must produce identical text.
+- **Backends**: the same fixture through `local`, `ssh` and `api` must produce
+  identical text.
+- **Detection**: native app, PWA and browser tab each trigger; a browser playing
+  audio with no microphone does not; a Teams tab with no call does not.
+- **Voices**: precision and recall against hand-labelled references. A thin
+  profile must degrade to tier 3, never mislabel.
 
 ## 14. Open questions
 
-1. Where does the authoritative transcript live once work meetings are involved
-   (§10)? Affects retention design.
-2. Can the home desktop reach the shared cluster, or is that office-network
-   only? Determines whether B is usable from home office.
-3. Cluster node specs are still unknown, pending a hardware scoping session.
-4. Is a Teams-native attendee roster available per meeting, which would sharpen
-   closed-set assignment beyond the invite list?
-5. What does `shell.json`'s `"plugins"` array accept? Blocks §9.2. Read
-   `/usr/share/omarchy` and `omarchy bar --help` on the Linux box.
-6. Does the Omarchy 4 notification daemon support notification actions? If yes,
-   §6.3 can offer Record/Ignore buttons directly.
-7. Does `o.bind` expose a raw `exec` action in Omarchy 4, and is
-   `SUPER + SHIFT + R` free?
-8. **Microphone contention with `voxtype`**, the existing push-to-talk daemon.
-   Both want the mic. PipeWire permits multiple readers, but this needs
-   confirming on hardware before it bites mid-meeting.
-9. Does the LiteLLM gateway pass through `prompt` and word timestamp
-   granularity (§8.2)?
+Answered since the first draft, by reading the machine (Appendix D):
 
----
+- ~~5. What does `shell.json`'s `plugins` array accept?~~ Omarchy 4 has a full
+  plugin system with a manifest schema and `omarchy plugin validate` (§9.2).
+- ~~6. Does the notification daemon support actions?~~ Yes.
+  `notifications/Service.qml` sets `actionsSupported: true`.
+- ~~4. Is a Teams-native attendee roster available?~~ Yes, as an attendance
+  report, but usually gated behind tenant-admin consent (§7.6).
+
+Still open:
+
+1. Where does the authoritative transcript live once work meetings are involved
+   (§10, §12)? Affects retention design.
+2. Can the home desktop reach the shared cluster, or is that office-network
+   only? Determines whether the `api` backend is usable from home.
+3. Cluster node specs are still unknown, pending a hardware scoping session.
+7. Does `o.bind` expose a raw `exec` action in Omarchy 4, and is
+   `SUPER + SHIFT + R` free? `omarchy menu keybindings --print` settles it.
+8. **Microphone contention with `voxtype`**, the existing push-to-talk daemon,
+   which is running on this machine today. Both want the default source.
+   PipeWire permits multiple readers, and the audio panel's own source comments
+   show Omarchy already handles Voxtype capture streams appearing — but this
+   needs confirming on hardware before it bites mid-meeting.
+9. Does the LiteLLM gateway pass through `prompt` and word timestamp
+   granularity (§8.1)? `munin doctor` tests this once the backend is configured.
+10. How does the `ssh` backend authenticate unattended? The worker runs from a
+    systemd user unit with no terminal, so a passphrase-protected key needs an
+    already-unlocked agent, or a dedicated command-restricted key with no
+    passphrase. The second is less elegant and more likely to still work in a
+    year.
+11. Does deleting a voice profile also unname that person in transcripts already
+    written? Defensible either way; decide once and write it down.
+12. Spool transport for the `ssh` backend — rsync over ssh is assumed, but NFS
+    and a pull model have different failure modes under §11.
+
+## 15. Install and setup
+
+Installing should not require reading any of the above.
+
+```
+git clone <repo> ~/dev/munin && ~/dev/munin/install.sh
+```
+
+| # | Step | Touches |
+|---|---|---|
+| 1 | Check `ffmpeg`, `pipewire`, Python 3.12+, `uv`; offer `omarchy pkg add` for anything missing | nothing yet |
+| 2 | Install CLI, daemon and worker | `~/.local/bin/munin*` |
+| 3 | Install and validate the shell plugin | `~/.config/omarchy/plugins/local.munin/` |
+| 4 | Put the widget in the bar | `omarchy bar put local.munin --before omarchy.tray` |
+| 5 | Bind the key, unbinding first if Omarchy owns it | `~/.config/hypr/bindings.lua`, backed up first |
+| 6 | Copy the systemd user unit, print the enable command rather than running it | `~/.config/systemd/user/munin.service` |
+| 7 | Create the data root and a default config | `~/munin/`, `~/munin/config.toml` |
+
+**Models are not downloaded by the installer.** `munin models pull` is a separate,
+explicit 6.2 GB. An installer that silently spends that much of someone's
+connection is one people stop trusting, and the CLI works without it against a
+remote backend.
+
+`munin setup` then asks the four questions that have no sensible default:
+transcription backend (and offers the model download), Microsoft 365 sign-in via
+device code, which microphone, and a ten-second test recording played back to
+confirm track separation.
+
+`munin doctor` re-runs every check and is **worth building first**. Every open
+question above ends up as a line in its output — mic contention with `voxtype`,
+whether the gateway honours `prompt`, whether attendance reports are granted,
+free disk, token expiry, which backends are reachable. It turns "is this set up
+correctly" into one command, and makes a broken install self-describing when
+someone returns to it in six months.
+
+`install.sh --uninstall` removes the binaries, plugin, bar entry, keybind and
+unit, and leaves `~/munin/` where it is, printing the path. Nothing recorded is
+ever removed by an uninstaller.
+
 
 ## Appendix A: Plaud upload feasibility (investigated 2026-09-14)
 
@@ -603,40 +904,61 @@ the magnitude as not.
 diarization, maintained by the National Library) is a candidate starting point
 for the Norwegian path rather than assembling the pipeline from scratch.
 
-## Appendix D: Omarchy conventions (read from `~/dev/dotfiles/omarchy`, 2026-09-14)
+## Appendix D: Omarchy conventions (verified on the machine, 2026-09-14)
+
+Omarchy 4.0.0.alpha. Read from `~/dev/dotfiles/omarchy` and confirmed against the
+running system.
 
 **Verified:**
 
-- Bar is Quickshell, not Waybar. Config `~/.config/omarchy/shell.json`, modules
-  by id, `"plugins": []` present and empty. Commit `5217f42` removed the Waybar
-  config ("waybar is no longer installed").
+- **The shell has a real plugin system.** `~/.config/omarchy/plugins/<id>/` with
+  `manifest.json` + QML, discovered at startup, hot-reloading on save, validated
+  by `omarchy plugin validate`. Kinds: `bar-widget`, `service`, `panel`,
+  `overlay`, `menu`, `bar`. Managed with `omarchy plugin add|clone|enable|list`.
+  Built-in widgets are cloned with `omarchy plugin clone <id>`, never edited in
+  `/usr/share/omarchy/`.
+- **Notification actions are supported.** `notifications/Service.qml` sets
+  `actionsSupported: true`.
+- **`Quickshell.Services.Pipewire` is usable from plugin QML** — nodes, streams,
+  `isSink`, `isStream`. No `pw-dump` polling needed.
+- **`qs.Ui` provides the panel furniture**: `Panel` (bar button + popup + an
+  `IpcHandler` with open/close/toggle), `BarIndicator`, `BarWidget`, `PanelHero`,
+  `PanelSectionHeader`, `PanelSlider`, `PanelSeparator`, `PanelActionButton`.
+  `omarchy.audio` is the reference implementation for a bar widget with a
+  dropdown.
+- **`bar/indicators/ScreenRecording.qml` is the precedent** for a recording
+  indicator, including the `󰻂` glyph and the `bar.run(...)` action idiom.
+- **Style tokens** in `Commons/Style.qml`: `cornerRadius: 0`, border alpha 0.4,
+  fill alphas 0.04 / 0.08 / 0.18 for normal / hover / selected.
+- Bar is Quickshell, not Waybar. Layout in the `bar` subtree of
+  `~/.config/omarchy/shell.json`, managed with `omarchy bar put|move|set`.
 - `shell.json` is deployed as a **copy**, never a symlink, because
   `omarchy-shell-config` writes with `jq > tmp; mv tmp` and the atomic rename
   would replace a symlink with a regular file.
-- Notifications go through the `omarchy-notification-send -g <glyph> "<msg>"`
-  wrapper, not raw `notify-send`.
+- Notifications go through `omarchy-notification-send -g <glyph> "<msg>"`.
 - Keybindings: `o.bind(keys, description, action_table)` in
   `~/.config/hypr/bindings.lua`, loaded after Omarchy defaults, so
-  `hl.unbind(...)` first for any key Omarchy owns. Modifier strings are
-  `" + "`-joined uppercase.
-- Hyprland config is Lua with **no build step**; `hyprctl reload` then
+  `hl.unbind(...)` first for any key Omarchy owns.
+- Hyprland config is Lua with no build step; `hyprctl reload` then
   `hyprctl configerrors` is the apply path.
 - Daemons: systemd `--user` units, copied into place, enabled by hand, never
-  committed as `*.target.wants/` symlinks. `voxtype.service` is the template.
+  committed as `*.target.wants/` symlinks. `voxtype.service` is the template —
+  and is **running on this machine**, which is what makes open question 8 real.
 - `~/.local/bin` for scripts, but the graphical-session PATH puts
-  `/usr/share/omarchy/bin` first, so `omarchy-*` names cannot be shadowed from
-  a user directory.
+  `/usr/share/omarchy/bin` first, so `omarchy-*` names cannot be shadowed from a
+  user directory (D12).
 - `omarchy refresh` uses `cp -f`, which writes through symlinks and will
   overwrite dotfiles repo contents with Omarchy defaults.
 - Idle: `shell.json` sets `screensaver: 150`, `lock: 300`.
-- ActivityWatch is already running (`aw-qt`, window and media-player watchers).
-- `xdph.conf` sets `allow_token_by_default = true`.
+- **No Teams client is installed.** Only Chromium, with Chrome desktop entries
+  present. Teams runs as a browser tab today, which is what drives the
+  three-shape detection in §6.3.
 
-**Not verified, must be checked on the Linux box** (these are open questions
-5-8, listed here so the gaps are not mistaken for settled design):
+**Not verified, must still be checked:**
 
-- The `"plugins"` schema in `shell.json`.
-- Whether the notification daemon supports actions/buttons.
 - Whether `o.bind` has a raw `exec` action in Omarchy 4, and whether
-  `SUPER + SHIFT + R` is free.
-- Whether `voxtype` and munin can hold the microphone simultaneously.
+  `SUPER + SHIFT + R` is free (open question 7).
+- Whether `voxtype` and munin can hold the microphone simultaneously
+  (open question 8).
+- Whether the LiteLLM gateway passes `prompt` and word timestamp granularity
+  (open question 9).

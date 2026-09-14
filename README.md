@@ -7,6 +7,9 @@ macOS, feeding a self-hosted Whisper + pyannote pipeline. Records only on
 explicit confirmation; the calendar enriches a session but never starts one.
 
 Design spec: [`docs/superpowers/specs/2026-09-14-meeting-recorder-design.md`](docs/superpowers/specs/2026-09-14-meeting-recorder-design.md)
+Implementation plan: [`docs/superpowers/plans/2026-09-14-implementation-plan.md`](docs/superpowers/plans/2026-09-14-implementation-plan.md)
+
+Design sketches: [`docs/design/`](docs/design/) ([sketch sheet](docs/design/munin-plugin-sketches.html))
 
 Status: design, pending approval. No implementation yet.
 
