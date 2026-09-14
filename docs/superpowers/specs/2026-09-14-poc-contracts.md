@@ -191,7 +191,8 @@ by state (§4).
       "app": "app.opus",
       "started_at": "2026-09-14T13:25:08+02:00",
       "stopped_at": "2026-09-14T13:52:40+02:00",
-      "duration_seconds": 1652.0
+      "duration_seconds": 1652.0,
+      "app_source": "stream"
     },
     {
       "index": 2,
@@ -199,7 +200,8 @@ by state (§4).
       "app": "app.002.opus",
       "started_at": "2026-09-14T13:56:10+02:00",
       "stopped_at": "2026-09-14T14:02:11+02:00",
-      "duration_seconds": 361.0
+      "duration_seconds": 361.0,
+      "app_source": "sink-monitor"
     }
   ],
   "checksums": { "mic.opus": "sha256:…", "app.opus": "sha256:…" },
@@ -225,6 +227,7 @@ Field rules:
 | `app` | `null` for a pure ad-hoc session with no identified app. Otherwise every key present, `null` where unknown. |
 | `calendar_event_id` | Always `null` in the PoC. The key exists so the schema does not change at M9. |
 | `segments` | Never empty once `state` has left `recording` successfully. `index` is 1-based and contiguous. |
+| `segments[].app_source` | **Added at integration (§16).** What the app track actually holds: `"stream"` (the meeting application's own audio and nothing else), `"sink-monitor"` (the whole desktop mix, taken because the application's stream could not be bound) or `"silent"` (a generated silent track, an ad-hoc session with no application). `null` means a capturer that does not report one — read as *unknown*, never as *isolated*. |
 | `checksums` | `sha256:<hex>` per audio file, keyed by filename, computed by the daemon at `captured`. |
 | `pending_reason` | Non-null only in state `pending`. Human-readable, one sentence. |
 | `error` | Non-null only in state `failed`: `{ "code": "...", "message": "...", "at": "..." }`. |
@@ -236,6 +239,15 @@ Field rules:
 implementation; nothing else may construct these names.
 
 `mixed.mp3`, `transcript.*` and `markers.json` are not produced in the PoC.
+
+**Why `app_source` is on the record.** The three values are not interchangeable.
+A `sink-monitor` track is the whole desktop mix: other applications, other
+people's audio, notification sounds — material that was never part of the
+meeting and whose subjects never saw a recording prompt. That is a GDPR and
+ISO 27001 question about *what was captured*, not a capture-quality footnote, and
+it cannot be recovered from the audio afterwards. The daemon reads it off the
+frozen `Capturer.describe()` seam (§5), so no platform module changed to supply
+it.
 
 ---
 
@@ -677,7 +689,7 @@ def pensieve_filename(title: str) -> str           # "<title>-transcript.txt"
 | `list` | `--limit N` `--json` | Recent sessions with state and pending reason. |
 | `event` | `call-started\|call-ended` `--pid` `--app` `--title` | Feed detection evidence from the plugin. |
 | `doctor` | `--json` | Every check, one line each, per-platform table (§16.5). |
-| `setup` | `--non-interactive` | Create `~/munin/`, write `config.toml`, pick the mic. |
+| `setup` | `--non-interactive`, `--write-default-config` (create the root and `config.toml`, then stop — what `install.sh` step 7 calls) | Create `~/munin/`, write `config.toml`, pick the mic. |
 | `daemon` | `--foreground` (default under systemd) | Run `munin-rec`. |
 | `worker` | `--once` `--interval N` | Run `munin-work`. |
 
@@ -706,6 +718,15 @@ exactly what `omarchy-toggle-idle` writes. Whether that service's
 `IdleMonitor { respectInhibitors: true }` also honours a logind inhibitor created
 by `systemd-inhibit --what=idle` could **not** be verified, so the PoC does not
 depend on it.
+
+**Reconciled at integration (§16):** the *mechanism* now lives in
+`munin/desktop/`, a platform package in the same idiom as `capture/` and
+`detect/` — `desktop/base.py` defines `IdleInhibitor`, `desktop/__init__.py`
+picks by `sys.platform`, `desktop/linux.py` holds `omarchy-toggle-idle` and the
+state-file path. `munin/daemon.py` names neither. An unsupported platform falls
+back to `NullIdleInhibitor` rather than raising: a meeting that records without
+inhibiting idle is still a recorded meeting. `tests/test_portability.py` fails
+the build if the string comes back above the boundary.
 
 Rules: the daemon records whether stay-awake was **already** set before it
 touched it, in `state.json` (`"idle_was_inhibited": bool`), and on stop restores
@@ -796,6 +817,7 @@ reported as a deviation — not made.
 | Workstream | Owns |
 |---|---|
 | **capture** | `src/munin/capture/linux.py`, `src/munin/detect/linux.py`, `tests/capture/` |
+| **integration** | `src/munin/desktop/**`, `tests/test_integration_poc.py`, `tests/test_portability.py` (created when the six branches were merged; see §16) |
 | **spool** | `src/munin/spool.py`, `src/munin/config.py`, `src/munin/paths.py`, `tests/spool/` |
 | **daemon** | `src/munin/daemon.py`, `src/munin/cli.py`, `src/munin/ipc.py`, `src/munin/notify.py`, `systemd/`, `tests/daemon/` |
 | **plugin** | `plugin/local.munin/**` |
@@ -806,8 +828,17 @@ reported as a deviation — not made.
 `pyproject.toml`, `.gitignore`, `src/munin/__init__.py`, `src/munin/capture/base.py`,
 `src/munin/capture/__init__.py`, `src/munin/detect/base.py`,
 `src/munin/detect/__init__.py`, `src/munin/backends/base.py`,
-`src/munin/backends/__init__.py`, `src/munin/pipeline/__init__.py`,
+`src/munin/backends/__init__.py`,
 `tests/conftest.py`, and this document.
+
+`src/munin/pipeline/__init__.py` was on that list and is **no longer**: the
+worker workstream was asked for `run(session, backend)` as the single entry the
+worker calls, which could not be added without editing it. The addition is
+purely additive and nothing else imports the module. Recorded in §16.
+
+**Branch naming.** All six workstreams were told to use `poc/<name>` and all six
+found that git refuses `refs/heads/poc/<name>` while the branch `poc` exists — a
+ref cannot be both a file and a directory. The branches are `poc-<name>`.
 
 `backends/none.py` and `pipeline/render.py` are owned by **worker** but their
 public signatures are fixed by §10.
@@ -838,3 +869,68 @@ The PoC records identifiable people. Nothing here changes the compliance posture
 of spec §12: audio stays on this machine, recording is confirmed (D4) and visible
 (D10), `history[]` in `session.json` is the audit trail, and no retention pass
 exists yet — so the PoC accumulates audio indefinitely until §15.5 is decided.
+
+---
+
+## 16. Integration: what the merge reconciled
+
+The six workstreams built in parallel against §0–§15 and merged into `poc` with
+**no file conflicts** — the ownership map held. What follows is every deviation
+they reported, and what was decided. Where this section and §0–§15 disagree,
+this section is later and wins.
+
+### 16.1 Contract changed, code kept
+
+| # | Deviation | Decision |
+|---|---|---|
+| 1 | Capture can fall back from the application's own stream to the desktop-sink monitor, and `session.json` could not express it | **Contract changed.** `segments[].app_source` added (§3). Compliance-relevant, not cosmetic: a sink-monitor track holds audio from people who were never in the meeting. The daemon reads it through the frozen `describe()` seam, so no platform file changed. |
+| 2 | `pipeline/__init__.py` was frozen but the worker was asked for `run()` | **Contract changed** (§14). Additive, nothing else imports it. |
+| 3 | `munin setup --write-default-config`, called by `install.sh` step 7, was not in the CLI table | **Contract changed** (§11). The flag now exists and is wired to `setup.main(write_config_only=True)`. |
+| 4 | Branches are `poc-<name>`, not `poc/<name>` | **Contract changed** (§14). Git will not allow the slash form while `poc` exists. |
+| 5 | `install.sh` keybind backup is `<target>.munin-bak`, not `<target>.munin-backup-<ISO date>` | **Code kept.** It is never overwritten once written, so the pre-Munin original cannot be destroyed by a second install. A dated name would accumulate copies of a file that is already in another git repository. |
+| 6 | `install.sh` step numbering differs from the §13 table | **Code kept.** Same seven steps and same effects; only the numbers in the progress output differ. |
+| 7 | The keybind is `o.bind(..., "munin toggle")`, not the `{ exec = ... }` table form | **Code kept** — confirmed against `/usr/share/omarchy/default/hypr/helpers.lua`: a table is only read for `launch`/`webapp`/`tui`/`omarchy` keys, so the table form would bind a no-op. |
+| 8 | `notify.ending_soon` says "Stops by itself in 1:00", not "at 2:00" | **Code kept.** The frozen parameter is `seconds_left`; rendering remaining time as an absolute mark would be wrong. |
+| 9 | `state.json` is also refreshed on a 30 s heartbeat | **Code kept.** Nothing that changes second-by-second is written — the plugin still computes elapsed from `started_at` — and it is how a reader tells a live daemon from a stale file. |
+| 10 | `min_free_mb` is MiB (1024²), not 10⁶ bytes | **Code kept**, and recorded here because the two differ by 5%. |
+
+### 16.2 Code changed at integration
+
+| # | Problem found | Fix |
+|---|---|---|
+| 1 | **The audit trail grew without bound.** `Worker.drain()` re-processed every `pending` session on every sweep, walking `pending → transcribing → pending` and appending **two rows to `history[]` each time**. `munin-work` runs on a 5 s timer and the PoC's *designed* end state is `pending`, so every session would have grown `session.json` forever (~34 000 rows/day). `history[]` is the audit trail and is never trimmed (§3, spec §12). | `drain()` skips a `pending` session that already carries a `pending_reason` while the backend reports itself unavailable, and retries the moment one becomes available. Verified: 50 sweeps leave the history at 5 rows. |
+| 2 | `Daemon` held `omarchy-toggle-idle` and the Omarchy state-file path, above the portability boundary | Extracted to `munin/desktop/` (§12), enforced by `tests/test_portability.py`. |
+| 3 | `ipc.socket_path()`, `daemon._state_file()` and `daemon.load_config()` carried fallbacks for "the spool workstream has not landed yet", which silently shadowed the real modules | Removed. `munin.paths` and `munin.config` are now the only source, and an unset `XDG_RUNTIME_DIR` surfaces as `DaemonUnreachable` (exit 3) instead of a `RuntimeError` traceback. |
+| 4 | `cli.py` swallowed `NotImplementedError` from `doctor`, `setup` and `worker` and printed "not implemented in this build" — which, once those modules were real, would mislabel a genuine `NotImplementedError` from deeper in the stack | Removed; the CLI imports the real modules. |
+| 5 | `setup.py` carried its own copy of `DEFAULT_CONFIG_TOML` | Deleted; `munin.config` is canonical. A test now asserts every comment line of the template survives a rewrite, so the two cannot drift. |
+| 6 | `Worker.drain()` returned a transition count while its docstring promised a session count | Returns distinct sessions. |
+
+### 16.3 Still open after integration
+
+1. **The daemon cannot tell that a meeting ended from the capturer.** Measured
+   on this machine: `pw-record` does not exit when its bound node disappears,
+   and ffmpeg's Ogg-Opus muxer writes nothing until close — so neither process
+   state nor file growth signals the end of a call. The honest signal is
+   `PipewireCapturer.app_stream_present()` (a `pw-dump` query) or the plugin's
+   PipeWire watch. **A daemon that polls `health()` alone will record until the
+   user stops it.**
+2. **No real Microsoft Teams call has been detected.** All three shapes
+   (native, PWA, browser tab) are tested against fixtures built from real
+   PipeWire and Hyprland object shapes with synthetic identities, but the exact
+   `application.name`, window class and tab title come from spec §6.3, not from
+   a measurement. If a shape fails, it is a row in `[[detection.apps]]`, not
+   code (D13).
+3. **Nothing has been installed.** `install.sh` has only been run `--dry-run`
+   and against a synthetic machine, so §15.2 (does one folder declaring
+   `kinds: ["service","bar-widget"]` load?), `omarchy bar put --before`, the
+   `hyprctl reload` of the appended keybind and the systemd unit are all
+   unverified on the real shell.
+4. **The microphone has never recorded speech.** Live capture was verified in a
+   silent room: the tracks are valid Opus, the app tone is ~78 dB down in the
+   mic track, but that the mic *picks up a voice* is untested.
+5. **Idle inhibition is unverified on hardware** (§15.1), and the three
+   notifications have never been rendered on a real screen — only their argv is
+   pinned by test.
+6. **Retention is still undecided** (§15.5). The PoC accumulates audio
+   indefinitely, and `app_source` now records that some of that audio may be
+   wider than the meeting.
