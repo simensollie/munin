@@ -1,0 +1,219 @@
+[
+  {
+    "address": "0x000000001004",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "teams-for-linux",
+    "title": "Weekly quality sync | Microsoft Teams",
+    "initialClass": "teams-for-linux",
+    "initialTitle": "Weekly quality sync | Microsoft Teams",
+    "pid": 4100,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x000000001068",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "chrome-teams.microsoft.com__-Default",
+    "title": "Chat | Microsoft Teams",
+    "initialClass": "chrome-teams.microsoft.com__-Default",
+    "initialTitle": "Chat | Microsoft Teams",
+    "pid": 4200,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x0000000010cc",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "google-chrome",
+    "title": "NORVA deviation review | Microsoft Teams",
+    "initialClass": "google-chrome",
+    "initialTitle": "NORVA deviation review | Microsoft Teams",
+    "pid": 4300,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x000000001130",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "google-chrome",
+    "title": "Beacon 365 product tour - YouTube",
+    "initialClass": "google-chrome",
+    "initialTitle": "Beacon 365 product tour - YouTube",
+    "pid": 4400,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x000000001194",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "google-chrome",
+    "title": "Chat with Ola Nordmann | Microsoft Teams",
+    "initialClass": "google-chrome",
+    "initialTitle": "Chat with Ola Nordmann | Microsoft Teams",
+    "pid": 4500,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x0000000011f8",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "google-chrome",
+    "title": "Weekly quality sync | Microsoft Teams",
+    "initialClass": "google-chrome",
+    "initialTitle": "Weekly quality sync | Microsoft Teams",
+    "pid": 4600,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  },
+  {
+    "address": "0x00000000125c",
+    "mapped": true,
+    "hidden": false,
+    "at": [
+      12,
+      38
+    ],
+    "size": [
+      3416,
+      1390
+    ],
+    "workspace": {
+      "id": 1,
+      "name": "1"
+    },
+    "floating": false,
+    "monitor": 0,
+    "class": "Alacritty",
+    "title": "munin - workstation",
+    "initialClass": "Alacritty",
+    "initialTitle": "munin - workstation",
+    "pid": 4700,
+    "xwayland": false,
+    "pinned": false,
+    "fullscreen": 0,
+    "grouped": [],
+    "tags": [],
+    "focusHistoryID": 0,
+    "inhibitingIdle": false
+  }
+]
