@@ -55,7 +55,8 @@ munin/
     daemon.py         munin-rec: detection, prompts, capture
     worker.py         munin-work: spool drain, pipeline, output
     admin/            loopback web surface (§9.5 of the spec)
-    capture/          linux.py, macos.py, base.py
+    capture/          base.py first, then linux.py, macos.py, windows.py
+    detect/           base.py, linux.py, macos.py, windows.py
     spool.py          session layout, segments, state machine, locking
     pipeline/         language.py asr.py diarize.py attribute.py
                       voices.py glossary.py render.py
@@ -73,8 +74,7 @@ munin/
 
 | # | Milestone | Delivers | Blocked by | Exit criterion |
 |---|---|---|---|---|
-| M0 | Hardware spike | OQ7 (keybind), OQ8 (mic contention) answered | — | Both written into Appendix D, or each has a decided fallback |
-| M1 | Linux two-track capture | `munin-rec` captures on command and writes a session | OQ8 | A real Teams call yields `mic.opus` + `app.opus` with correct separation |
+| M1 | Linux two-track capture | `capture/base.py` and `detect/base.py` first, then the Linux implementations; `munin-rec` captures on command and writes a session | — | A real Teams call yields `mic.opus` + `app.opus` with correct separation, and nothing above the boundary names a platform |
 | M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard | M1 | Ad-hoc path works with no calendar and no detection |
 | M3 | Shell plugin | Detection, three notifications, bar states, dropdown panel | M0, M2 | Joining a Teams call prompts; the bar shows state throughout |
 | M4 | Pipeline on `local` | Language routing, ASR, diarization, attribution tiers 1/3/4, output format | M1 | A captured meeting yields a conformant transcript |
@@ -86,11 +86,19 @@ munin/
 | M10 | `ssh` backend | Push audio, run remote worker, pull transcript | M4, OQ10 | Mini PC records, desktop transcribes, same text as `local` |
 | M11 | `api` backend | Remote ASR, local diarization split | M4, OQ2, OQ9 | Same fixture through `api` matches `local` |
 | M12 | Plaud export, retention | `export`, `list --not-uploaded`, retention pass | M2, OQ1 | Outstanding upload set queryable; retention runs on a schedule |
-| M13 | macOS capture | BlackHole or ScreenCaptureKit behind `capture/base.py` | M1 | MacBook produces the same session layout as Linux |
+| M13 | macOS capture and indicator | ScreenCaptureKit behind `capture/base.py`, menu-bar extra | M1 | MacBook produces the same session layout as Linux |
+| M14 | Windows capture and indicator | WASAPI process loopback, tray icon | M1 | Same session layout again; detection by process name |
 
-**M0 is an evening.** Both its answers change code written later — a keybind
-Omarchy already owns needs unbinding, and a microphone Voxtype will not share is
-a design change rather than a tweak.
+**M0 is done.** `SUPER + SHIFT + R` is free, and `voxtype` does not contend for
+the microphone: it holds the default source only during push-to-talk, and two
+concurrent readers on one source were verified working. Both findings are in
+Appendix D. What remains from that spike is one live-call test of voxtype's
+`pause_media`, which pauses MPRIS players and may pause a Teams browser tab.
+
+**M1 carries the portability burden.** §16 of the spec is a constraint on this
+milestone, not a later concern: the base interfaces are written first, and if
+the pipeline ever needs to know which platform it is on, the boundary is wrong.
+Getting that wrong is cheap to fix in M1 and expensive to fix at M13.
 
 **M5 lands early on purpose.** `munin doctor` is where every open question
 becomes a line of output, which is what makes the rest of the build debuggable
@@ -144,10 +152,13 @@ Numbers refer to the spec's §14.
 3. **Retention defaults.** Audio is ~11 MB an hour and loses value once the
    transcript is verified; transcripts are small and worth keeping. Proposed:
    audio 90 days, transcripts indefinitely.
-4. **OQ10 — unattended SSH auth.** A command-restricted key with no passphrase
+4. **Is Windows actually planned, or only possible?** The spec now assumes
+   Linux → macOS → Windows (D21, §16). The portability work in M1 is cheap
+   either way, but M14 is real scope that has never been costed.
+5. **OQ10 — unattended SSH auth.** A command-restricted key with no passphrase
    is less elegant than an unlocked agent and more likely to still work in a
    year.
-5. **Glossary location.** `examples/glossary.toml` is synthetic and belongs
+6. **Glossary location.** `examples/glossary.toml` is synthetic and belongs
    here. The real one is by definition a list of real customer, product and
    colleague names — exactly what cannot enter this public repo. It lives at
    `~/munin/glossary.toml`; whether it is also version-controlled somewhere
@@ -155,6 +166,7 @@ Numbers refer to the spec's §14.
 
 ## 8. What to do first
 
-1. Run the M0 checklist on the Linux box; write results into Appendix D.
-2. Decide item 5 above (glossary location); it is cheap and blocks M7.
-3. Start M1.
+1. Decide item 6 above (glossary location); it is cheap and blocks M7.
+2. Start M1, base interfaces before Linux implementations (§16.5).
+3. Test `voxtype`'s `pause_media` against a live Teams call when one is next
+   convenient. Not blocking; the mitigation is one config line.

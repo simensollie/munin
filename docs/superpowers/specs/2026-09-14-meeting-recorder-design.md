@@ -38,8 +38,8 @@ second customer name appears zero times in 756,000 words.
 
 ## 2. Goals
 
-- Record digital meetings on Linux and macOS with one confirmation and no other
-  manual steps.
+- Record digital meetings with one confirmation and no other manual steps:
+  Linux now, macOS next, Windows after (§16).
 - Produce transcripts at least as good as Plaud's, and materially better on
   domain vocabulary.
 - Keep speaker names consistent across meetings, including ad-hoc calls the
@@ -83,6 +83,7 @@ second customer name appears zero times in 756,000 words.
 | D18 | All Munin data lives under `~/munin/` | One named root, so a directory in `$HOME` says what it is and what put it there (§7.5) |
 | D19 | Three transcription backends — `local`, `ssh`, `api` — in an ordered fallback chain | One interface covers a GPU desktop, a headless mini PC and a shared gateway (§8) |
 | D20 | The shell plugin never captures | A shell hot-reload or crash must never kill a recording; capture lives in a systemd daemon (§9.1) |
+| D21 | Munin implements its own capture; no dependency on `voxtype` | `voxtype meeting` covers part of the Linux capture layer, but is Linux-only. Building on it would mean writing the same layer twice more for macOS and Windows, after the pipeline had shaped itself around another tool's data model (§16) |
 
 ## 5. Architecture
 
@@ -140,12 +141,23 @@ Encoding is Opus, 24 kbps mono per track, via `ffmpeg`. A 60-minute meeting is
 roughly 11 MB for both tracks, which makes shipping audio between machines free
 relative to transcribing it.
 
-### 6.2 macOS (phase 2)
+### 6.2 macOS and Windows (phases 2 and 3)
 
-macOS has no monitor source. Capture requires either a BlackHole aggregate
-device or ScreenCaptureKit. Deferred: the MacBook still has Plaud today, so this
-is not on the critical path. The capture interface is designed so this slots in
-without touching anything else.
+Neither is on the critical path — the MacBook still has Plaud today — but both
+are planned, so the capture interface is narrow by design and nothing above it
+knows which platform produced a session. See §16 for the full split.
+
+- **macOS** has no monitor source. Per-application audio comes from
+  ScreenCaptureKit (macOS 13+), which needs the screen-recording TCC permission
+  in addition to the microphone one. A BlackHole aggregate device is the
+  fallback, but it requires manual setup and a virtual device, so it is the
+  worse plan rather than the first one.
+- **Windows** has per-process loopback capture through WASAPI, which is a closer
+  match to Munin's "bind to this specific stream" requirement than anything
+  macOS offers.
+
+Detection gets *easier* on both: Teams is a native application there, so the
+three-shape problem in §6.3 collapses to a process match.
 
 ### 6.3 Trigger and confirmation
 
@@ -751,6 +763,20 @@ Answered since the first draft, by reading the machine (Appendix D):
   `notifications/Service.qml` sets `actionsSupported: true`.
 - ~~4. Is a Teams-native attendee roster available?~~ Yes, as an attendance
   report, but usually gated behind tenant-admin consent (§7.6).
+- ~~7. Is `SUPER + SHIFT + R` free?~~ Yes, confirmed by the user.
+- ~~13. Should Munin build on `voxtype meeting`?~~ No. Decided: Munin implements
+  its own capture (D21). `voxtype meeting` covers two-source capture, echo
+  cancel, source-based and ECAPA-TDNN diarization, and local/remote whisper
+  modes — but it is Linux-only, and depending on it would put the least portable
+  part of Munin on a foundation that cannot cross to macOS or Windows. One idea
+  worth taking from it regardless: GTCRN enhancement plus transcript dedup on
+  the mic track, which is not otherwise in this spec.
+- ~~8. Microphone contention with `voxtype`?~~ No contention. `voxtype` does not
+  hold the microphone persistently — the default source sits `SUSPENDED` with
+  zero capture streams until push-to-talk is pressed, capped at 60 s
+  (`max_duration_secs`). Two concurrent readers on the same source were verified
+  working, each negotiating its own format (44.1 kHz stereo and 16 kHz mono off
+  one 16 kHz mono device), both receiving audio, no errors. See Appendix D.
 
 Still open:
 
@@ -759,13 +785,13 @@ Still open:
 2. Can the home desktop reach the shared cluster, or is that office-network
    only? Determines whether the `api` backend is usable from home.
 3. Cluster node specs are still unknown, pending a hardware scoping session.
-7. Does `o.bind` expose a raw `exec` action in Omarchy 4, and is
-   `SUPER + SHIFT + R` free? `omarchy menu keybindings --print` settles it.
-8. **Microphone contention with `voxtype`**, the existing push-to-talk daemon,
-   which is running on this machine today. Both want the default source.
-   PipeWire permits multiple readers, and the audio panel's own source comments
-   show Omarchy already handles Voxtype capture streams appearing — but this
-   needs confirming on hardware before it bites mid-meeting.
+7. Does `o.bind` expose a raw `exec` action in Omarchy 4? The keybind itself is
+   free, but the action form is still unverified.
+8. **`voxtype` pauses MPRIS players while recording** (`pause_media = true`).
+   Chromium registers an MPRIS instance per tab playing media, so pressing
+   push-to-talk during a browser-tab Teams call may pause the meeting audio.
+   Needs testing against a live call; the mitigation is `pause_media = false`.
+
 9. Does the LiteLLM gateway pass through `prompt` and word timestamp
    granularity (§8.1)? `munin doctor` tests this once the backend is configured.
 10. How does the `ssh` backend authenticate unattended? The worker runs from a
@@ -817,6 +843,84 @@ someone returns to it in six months.
 unit, and leaves `~/munin/` where it is, printing the path. Nothing recorded is
 ever removed by an uninstaller.
 
+
+## 16. Portability
+
+Linux now, macOS next, Windows after (D21). The cost of that ordering is paid
+once, at the capture boundary, and only if the boundary stays narrow.
+
+### 16.1 What ports and what does not
+
+| Portable — written once | Per platform |
+|---|---|
+| Session format, `~/munin/`, spool and state machine | Capture: two independent streams |
+| Pipeline: language routing, ASR, diarization, voice register, glossary, render | Detection: is a call live, and is it Teams |
+| Backends: `local`, `ssh`, `api` | Status indicator |
+| M365 enrichment | Notifications with actions |
+| CLI, `munin setup`, `munin doctor` | Idle inhibit |
+| `munin admin` — a loopback web UI, identical everywhere | |
+
+The admin surface being a local web app rather than a native one is worth
+keeping for this reason alone: the register, review queue, session list and
+backend configuration are the largest UI in the project, and they port for free.
+
+**The rule:** nothing above `capture/` and `detect/` may reference a platform.
+If the pipeline ever needs to know it is on Linux, the interface is wrong.
+
+### 16.2 Capture, per platform
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| Track 1 — you | PipeWire default source | CoreAudio input device | WASAPI capture endpoint |
+| Track 2 — them | PipeWire `.monitor` bound to the app's sink-input | ScreenCaptureKit per-application audio (macOS 13+) | WASAPI process loopback |
+| Fallback | — | BlackHole aggregate device | System loopback, then filter |
+| Permission | none | Screen Recording **and** Microphone (TCC) | Microphone |
+| Phase | 1 | 2 | 3 |
+
+Windows is the best-matched of the three: process loopback binds to a single
+process, which is exactly what D2 asks for. macOS is the worst — the
+screen-recording permission is a surprising thing to be asked for in order to
+record audio, and it needs explaining in `munin setup` rather than arriving as a
+bare system prompt.
+
+### 16.3 Detection, per platform
+
+The two conditions in §6.3 stay the same everywhere; only their evidence changes.
+
+| | Linux | macOS | Windows |
+|---|---|---|---|
+| A call is live | PipeWire: one process holds playback + capture | CoreAudio process audio state | WASAPI session state per process |
+| It is Teams | PipeWire client, else Hyprland window class/title | Bundle id, else window title | Process `ms-teams.exe`, else window title |
+
+**Detection is simpler off Linux**, because Teams ships a native client on both.
+The three-shape problem in §6.3 exists because this machine runs Teams as a
+browser tab; elsewhere the process name settles it, and the window-title path is
+needed only for the browser case.
+
+### 16.4 Status indicator, per platform
+
+| Linux | macOS | Windows |
+|---|---|---|
+| Omarchy Quickshell plugin (§9.2) | Menu-bar extra | Tray icon |
+| Notification actions via the Omarchy daemon | `UNUserNotificationCenter` | Toast notifications with actions |
+
+All three need the same states and the same actions, so the indicator is a thin
+shim over `munin status` in every case. The dropdown panel is the part that does
+not port: on macOS and Windows the equivalent is opening `munin admin`, which is
+one menu item rather than a second implementation.
+
+### 16.5 Consequence for phase 1
+
+Phase 1 must not accumulate Linux assumptions above the boundary. Concretely:
+
+- `capture/base.py` is written before `capture/linux.py`, not extracted from it
+  afterwards.
+- `detect/base.py` likewise — the two-condition structure in §6.3 *is* the
+  interface, and per-platform code only supplies evidence for each condition.
+- `session.json` records which platform and capture method produced it, so a
+  transcript stays reproducible on a machine that could not have recorded it.
+- `munin doctor` has a per-platform check table from the start, even while only
+  one column is populated.
 
 ## Appendix A: Plaud upload feasibility (investigated 2026-09-14)
 
@@ -942,8 +1046,17 @@ running system.
 - Hyprland config is Lua with no build step; `hyprctl reload` then
   `hyprctl configerrors` is the apply path.
 - Daemons: systemd `--user` units, copied into place, enabled by hand, never
-  committed as `*.target.wants/` symlinks. `voxtype.service` is the template —
-  and is **running on this machine**, which is what makes open question 8 real.
+  committed as `*.target.wants/` symlinks. `voxtype.service` is the template.
+- **PipeWire allows concurrent capture on one source.** Verified on the
+  microphone (`POROSVOC PNC201 4MIC`, `s16le 1ch 16000Hz`): two readers attached
+  to the same source simultaneously, each negotiating its own format, both
+  receiving audio, source `RUNNING`, no errors. `voxtype` holds the microphone
+  only during push-to-talk, so Munin's long-lived capture and voxtype's bursts
+  coexist. Open question 8 is closed.
+- **PipeWire needs `XDG_RUNTIME_DIR`.** Without it `pactl` and `pw-dump` return
+  nothing at all rather than failing loudly. The systemd unit in §9.1 already
+  sets `Environment=XDG_RUNTIME_DIR=%t`; anything else calling PipeWire from a
+  non-session context needs it too.
 - `~/.local/bin` for scripts, but the graphical-session PATH puts
   `/usr/share/omarchy/bin` first, so `omarchy-*` names cannot be shadowed from a
   user directory (D12).
@@ -956,9 +1069,7 @@ running system.
 
 **Not verified, must still be checked:**
 
-- Whether `o.bind` has a raw `exec` action in Omarchy 4, and whether
-  `SUPER + SHIFT + R` is free (open question 7).
-- Whether `voxtype` and munin can hold the microphone simultaneously
-  (open question 8).
+- Whether `o.bind` has a raw `exec` action in Omarchy 4 (open question 7).
+  `SUPER + SHIFT + R` itself is free — confirmed by the user.
 - Whether the LiteLLM gateway passes `prompt` and word timestamp granularity
   (open question 9).
