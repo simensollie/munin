@@ -1,0 +1,31 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "munin"
+version = "0.1.0"
+description = "Cross-platform digital meeting recorder and transcription pipeline"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { file = "LICENSE" }
+authors = [{ name = "Simen Sollie" }]
+# Runtime is stdlib-only by design (tomllib, sockets, subprocess). External
+# tools (pw-record, ffmpeg, hyprctl, omarchy-notification-send) are invoked as
+# subprocesses, never imported. See docs/superpowers/specs/2026-09-14-poc-contracts.md.
+dependencies = []
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+munin = "munin.cli:main"
+munin-rec = "munin.daemon:main"
+munin-work = "munin.worker:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

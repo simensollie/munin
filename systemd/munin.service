@@ -1,0 +1,25 @@
+# Munin's recorder daemon, following voxtype.service on this machine exactly:
+# that precedent matters, because voxtype is also an audio daemon bound to the
+# graphical session and its unit is known to work here.
+#
+# Why systemd rather than Hyprland's exec-once: a recording must survive a shell
+# hot-reload or crash (D20), and only systemd gives restart and lifecycle
+# control. XDG_RUNTIME_DIR is set explicitly because every PipeWire tool fails
+# silently without it.
+#
+# Deployed by copy into ~/.config/systemd/user/. Enablement is never committed.
+
+[Unit]
+Description=Munin meeting recorder daemon
+PartOf=graphical-session.target
+After=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/munin-rec
+Restart=on-failure
+RestartSec=5
+Environment=XDG_RUNTIME_DIR=%t
+
+[Install]
+WantedBy=graphical-session.target

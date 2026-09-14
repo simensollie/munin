@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "local.munin",
+  "name": "Munin",
+  "version": "0.1.0",
+  "author": "Simen Sollie",
+  "description": "Meeting recorder: detects calls, prompts, and shows recording state.",
+  "keepLoaded": true,
+  "kinds": ["service", "bar-widget"],
+  "entryPoints": {
+    "service": "Service.qml",
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "Munin",
+    "description": "Recording state, elapsed time and the session queue.",
+    "category": "Audio",
+    "allowMultiple": false,
+    "defaultSection": "right"
+  }
+}
