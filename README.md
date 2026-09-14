@@ -13,3 +13,7 @@ Status: design, pending approval. No implementation yet.
 > This is a public copy of an internal design document. Customer names,
 > colleague names and internal project references have been replaced with
 > generic descriptors; all counts and measurements are unchanged.
+
+## License
+
+MIT. See [LICENSE](LICENSE).
