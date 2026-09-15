@@ -25,6 +25,13 @@ Frozen contracts for the PoC: [`docs/superpowers/specs/2026-09-14-poc-contracts.
 PoC status, what was verified live and how to install:
 [`docs/superpowers/plans/2026-09-14-poc-status.md`](docs/superpowers/plans/2026-09-14-poc-status.md).
 
+Setting the transcription models up by hand on a GPU desktop, until
+`munin models pull` exists:
+[`docs/playbooks/2026-09-15-model-setup.md`](docs/playbooks/2026-09-15-model-setup.md).
+It pins verified versions, and flags two things the spec has not caught up with:
+the diarization model named in §7.2 is now legacy upstream, and whether the
+current pyannote fits in 8 GB alongside Whisper is unmeasured.
+
 > This is a public copy of an internal design document. Customer names,
 > colleague names and internal project references have been replaced with
 > generic descriptors; all counts and measurements are unchanged.
