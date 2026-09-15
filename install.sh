@@ -294,12 +294,42 @@ shell_step_deferred() {
   return 0
 }
 
+# `omarchy plugin enable` is answered by the running shell, which persists its
+# *in-memory* configuration back to shell.json (shell.qml: mutateShellConfig
+# copies shellConfig and writes it). Seen on this machine: that flipped
+# bar.transparent from false to true and made the bar unreadable, because the
+# shell's idea of the bar differed from the file. Snapshot the two settings a
+# user notices and put them back if the enable changed them.
+bar_setting() {
+  [[ -f $SHELL_JSON ]] && have jq || { echo ""; return 0; }
+  # Not `//`: jq treats false like null, and false is the value that matters.
+  jq -r --arg key "$1" 'if .bar[$key] == null then "" else (.bar[$key] | tostring) end' \
+    "$SHELL_JSON" 2>/dev/null || echo ""
+}
+
+restore_bar_settings() {
+  local before_transparent="$1" before_position="$2" after
+  after="$(bar_setting transparent)"
+  if [[ -n $before_transparent && $after != "$before_transparent" ]]; then
+    warn "the shell changed bar.transparent $before_transparent -> $after while enabling; restoring"
+    run omarchy bar transparent "$before_transparent" || warn "could not restore bar transparency"
+  fi
+  after="$(bar_setting position)"
+  if [[ -n $before_position && $after != "$before_position" ]]; then
+    warn "the shell changed bar.position $before_position -> $after while enabling; restoring"
+    run omarchy bar position "$before_position" || warn "could not restore bar position"
+  fi
+}
+
 step_plugin_enable() {
   step 4 "Enabling the plugin and placing it on the bar"
   if ! have omarchy; then
     warn "omarchy is missing; skipped enable and bar placement"
     return 0
   fi
+  local before_transparent before_position
+  before_transparent="$(bar_setting transparent)"
+  before_position="$(bar_setting position)"
   if have omarchy-shell; then
     run omarchy-shell shell rescanPlugins || warn "rescanPlugins failed; is the shell running?"
   fi
@@ -318,6 +348,7 @@ step_plugin_enable() {
     info "placed $PLUGIN_ID on the bar before $BAR_ANCHOR"
   fi
   info "enabled $PLUGIN_ID"
+  (( DRY_RUN )) || restore_bar_settings "$before_transparent" "$before_position"
 }
 
 # ---------------------------------------------------------------------------

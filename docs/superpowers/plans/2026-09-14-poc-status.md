@@ -27,7 +27,7 @@ drives are subprocesses.
 | `install.sh`, `munin doctor`, `munin setup` | repo root, `src/munin/doctor.py`, `setup.py` | Built, tested; `install.sh --enable` run for real, `doctor` reports 0 failed; `setup` not yet run |
 | systemd user unit | `systemd/munin.service` | Enabled and active under `graphical-session.target` |
 
-Tests: `415 passed, 1 skipped`. The suite is deterministic and offline.
+Tests: `417 passed, 1 skipped`. The suite is deterministic and offline.
 
 ## 2. Verified live on this machine (2026-09-15)
 
@@ -74,6 +74,15 @@ completed. Findings:
   `~/munin/recordings/2026/09/2026-09-15T1053-installed-daemon-test/`.
 - `hyprctl configerrors` is now empty; the two `hl.focus` errors seen before the
   install came from the dotfiles bindings and are gone after the reload.
+- **Step 4 flipped `bar.transparent` from `false` to `true`** and the bar became
+  hard to read. Cause: `omarchy plugin enable` is answered by the running shell,
+  which persists its *in-memory* configuration (`shell.qml`
+  `mutateShellConfig`), and that differed from the file. Restored with
+  `omarchy bar transparent false`; the installer now snapshots
+  `bar.transparent` and `bar.position` before step 4 and puts them back if the
+  enable changed them (regression test with a shim that reproduces the flip).
+  Worth reporting upstream: an unattended `plugin enable` should not rewrite
+  unrelated bar settings.
 
 Not verified, and why:
 

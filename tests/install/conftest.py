@@ -65,6 +65,19 @@ if [[ ${1:-} == plugin && ${2:-} == enable ]]; then
       )' "$SHIM_SHELL_JSON" >"$tmp"
   fi
   mv "$tmp" "$SHIM_SHELL_JSON"
+  # The real shell persists its in-memory config on enable; on one machine
+  # that flipped bar.transparent. SHIM_FLIP_TRANSPARENT=1 reproduces it.
+  if [[ ${SHIM_FLIP_TRANSPARENT:-0} == 1 ]]; then
+    tmp="$(mktemp)"
+    jq '.bar.transparent = true' "$SHIM_SHELL_JSON" >"$tmp" && mv "$tmp" "$SHIM_SHELL_JSON"
+  fi
+  exit 0
+fi
+if [[ ${1:-} == bar && ${2:-} == transparent ]]; then
+  [[ -f ${SHIM_SHELL_JSON:-} ]] || exit 0
+  tmp="$(mktemp)"
+  jq --argjson v "${3:-false}" '.bar.transparent = $v' "$SHIM_SHELL_JSON" >"$tmp"
+  mv "$tmp" "$SHIM_SHELL_JSON"
   exit 0
 fi
 if [[ ${1:-} == bar && ${2:-} == put ]]; then

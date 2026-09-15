@@ -316,3 +316,30 @@ def test_install_derives_the_runtime_dir_for_a_bare_terminal(machine: FakeMachin
     del machine.env["XDG_RUNTIME_DIR"]
     machine.run()
     assert machine.called("hyprctl reload")
+
+
+def test_enable_may_not_change_the_bars_transparency(machine: FakeMachine) -> None:
+    """Seen live: the shell persisted its in-memory config on enable and flipped
+    bar.transparent to true, making the bar unreadable. The installer restores it."""
+    import json
+
+    before = json.loads(machine.shell_json.read_text(encoding="utf-8"))
+    before["bar"]["transparent"] = False  # as on the machine where this happened
+    machine.shell_json.write_text(json.dumps(before), encoding="utf-8")
+    machine.env["SHIM_FLIP_TRANSPARENT"] = "1"
+    machine.run()
+    assert machine.called("omarchy bar transparent false")
+    after = json.loads(machine.shell_json.read_text(encoding="utf-8"))
+    assert after["bar"]["transparent"] is False
+    assert [w["id"] for w in after["bar"]["layout"]["right"]][:2] == ["local.munin", "omarchy.tray"]
+
+
+def test_a_bar_that_was_already_transparent_is_left_alone(machine: FakeMachine) -> None:
+    import json
+
+    data = json.loads(machine.shell_json.read_text(encoding="utf-8"))
+    data["bar"]["transparent"] = True
+    machine.shell_json.write_text(json.dumps(data), encoding="utf-8")
+    machine.run()
+    assert not machine.called("omarchy bar transparent")
+    assert json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["transparent"] is True
