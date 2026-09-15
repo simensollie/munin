@@ -40,9 +40,11 @@ def load_fixture(name: str):
 
 
 MIC = CaptureTarget(kind="mic", handle="56", label="Synthetic Headset Mono")
-APP = CaptureTarget(
-    kind="app", handle="1301", label="Microsoft Teams", pid=4310, app_id="teams-tab"
-)
+#: A target with no ``pid``: all the capturer can do is bind the one node the
+#: handle names. Everything in this file exercises those older modes; the
+#: ``process-sink`` mode a target *with* a pid selects lives in
+#: ``test_private_sink.py``, where pactl is faked.
+APP = CaptureTarget(kind="app", handle="1301", label="Microsoft Teams", app_id="teams-tab")
 
 
 @dataclass

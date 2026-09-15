@@ -1,0 +1,20 @@
+[
+  {
+    "index": 7077,
+    "properties": {
+      "application.name": "Chromium input",
+      "application.process.id": "4310",
+      "pipewire.sec.pid": "1125",
+      "application.process.binary": "teams-for-linux"
+    }
+  },
+  {
+    "index": 7500,
+    "properties": {
+      "application.name": "Music Player",
+      "application.process.id": "5150",
+      "pipewire.sec.pid": "1125",
+      "application.process.binary": "music-player"
+    }
+  }
+]

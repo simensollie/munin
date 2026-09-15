@@ -1,0 +1,70 @@
+[
+  {
+    "index": 9301,
+    "client": "7077",
+    "sink": 57,
+    "properties": {
+      "application.name": "Chromium",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9301"
+    }
+  },
+  {
+    "index": 9302,
+    "client": "7077",
+    "sink": 57,
+    "properties": {
+      "application.name": "Chromium",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9302"
+    }
+  },
+  {
+    "index": 9303,
+    "client": "7077",
+    "sink": 57,
+    "properties": {
+      "application.name": "Chromium",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9303"
+    }
+  },
+  {
+    "index": 9304,
+    "client": "7077",
+    "sink": 57,
+    "properties": {
+      "application.name": "Chromium",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9304"
+    }
+  },
+  {
+    "index": 9305,
+    "client": "7077",
+    "sink": 57,
+    "properties": {
+      "application.name": "Chromium",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9305"
+    }
+  },
+  {
+    "index": 9310,
+    "client": "7500",
+    "sink": 57,
+    "properties": {
+      "application.name": "Music Player",
+      "application.process.id": "5150",
+      "application.process.binary": "music-player",
+      "media.name": "Playback",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "9310"
+    }
+  }
+]

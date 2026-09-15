@@ -18,6 +18,7 @@ drives are subprocesses.
 | Piece | Where | State |
 |---|---|---|
 | Two-track Linux capture (PipeWire, `pw-record` → `ffmpeg` libopus 24 kbps mono) | `src/munin/capture/linux.py` behind `capture/base.py` | Built, tested, run live |
+| App-track isolation: a private null sink per recording, the meeting process moved onto it, a loopback so the user still hears the call, crash recovery for a killed daemon | `src/munin/capture/private_sink.py` (contracts §16.6) | Built, tested, run live against `pw-play` and a real Chromium tab |
 | Detection: the two conditions of spec §6.3, three Teams shapes | `src/munin/detect/` (daemon side), `plugin/local.munin/Service.qml` (shell side) | Built, tested against fixtures; never seen a real Teams call |
 | Spool: session layout, `session.json`, state machine, segments, resume window, disk guard, crash recovery | `src/munin/spool.py`, `config.py`, `paths.py` | Built, tested, run live |
 | `munin-rec` daemon: state machine, timers, grace period, resume, notifications, idle inhibit, socket + state file | `src/munin/daemon.py`, `ipc.py`, `notify.py`, `desktop/` | Built, tested, run live |
@@ -27,7 +28,7 @@ drives are subprocesses.
 | `install.sh`, `munin doctor`, `munin setup` | repo root, `src/munin/doctor.py`, `setup.py` | Built, tested; `install.sh --enable` run for real, `doctor` reports 0 failed; `setup` not yet run |
 | systemd user unit | `systemd/munin.service` | Enabled and active under `graphical-session.target` |
 
-Tests: `417 passed, 1 skipped`. The suite is deterministic and offline.
+Tests: `468 passed, 1 skipped`. The suite is deterministic and offline.
 
 ## 2. Verified live on this machine (2026-09-15)
 
@@ -44,6 +45,9 @@ was written.
 | `ffprobe` durations match `session.json` within 0.05 s | yes (11.27 / 11.31 s) |
 | Mic track carries the room (not −∞) and does not carry the tone | mic −57 dB RMS |
 | App track carries the tone on an ad-hoc start | **−21 dB RMS** after the §16.5 fix; −∞ before it |
+| App track holds the meeting process and *not* a second application playing at the same time (contracts §16.6, `app_source: "process-sink"`) | **79.6 dB** rejection driving the capturer directly, **77.8 dB** through `munin-rec`, **92.6 dB** with a real Chromium tab as the meeting |
+| The private sink and its loopback exist only for the life of the segment; the meeting's stream is back on the default sink afterwards and no `munin-app-*` module is left loaded | yes, on every run |
+| `munin-rec` SIGKILLed mid-recording → the next startup's `recover_capture()` moves the stranded stream back to the default sink and unloads both leftover modules | yes |
 | `munin-work --once` exits 0; session becomes `pending` with `pending_reason = "no transcription backend configured"`; `history[]` stays at 5 rows | yes |
 | `munin start --resume` inside the window adds segment 2 (`mic.002.opus`, `app.002.opus`) to the same session | yes |
 | `munin event call-started …` → `detected` + "Meeting detected" notification; `call-ended` → no recording created (D4) | yes |
@@ -111,6 +115,11 @@ Not verified, and why:
   have only been exercised through the state file.
 - **A real Microsoft Teams call.** The three detection shapes come from spec
   §6.3, not a measurement. If one fails it is a row in `[[detection.apps]]`.
+  The `process-sink` app track was measured against a real Chromium tab playing
+  a tone, which is the right *shape* (one audio child process, a "Playback" node
+  it recreates) but not a call: five concurrent Chromium streams moving cleanly
+  under call load is still unverified, and so is a default-sink change made
+  while a recording runs.
 - **Speech in the microphone track.** Every run was in a quiet room.
 - **Idle inhibition** over a real 150 s idle, and how the notifications look on
   screen (their argv is pinned by tests).
@@ -125,8 +134,12 @@ the glossary, M365 enrichment, Plaud export and `mixed.mp3`, `transcript.json`,
 `markers.json`, the admin web UI, the `ssh` and `api` backends, retention, macOS
 and Windows. Pipeline stubs raise `NotImplementedError` pointing at the spec
 section. **Compliance flag:** with no retention pass the PoC keeps audio
-indefinitely, and `segments[].app_source` now records that an ad-hoc recording
-may hold the whole output mix rather than one application.
+indefinitely, and `segments[].app_source` records what the app track actually
+holds — `process-sink` and `stream` are one application, `sink-monitor` is the
+whole desktop mix and may carry people who were never in the meeting and saw no
+prompt. §16.6 moved the common case (a Chromium meeting client) from
+`sink-monitor` to `process-sink`, which narrows what is captured rather than
+widening it; the daemon still notifies while a widened capture is running.
 
 ## 4. Install, run, uninstall
 

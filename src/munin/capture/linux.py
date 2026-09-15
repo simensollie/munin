@@ -1,10 +1,19 @@
 """PipeWire two-track capture (spec 6.1).
 
-Track 1 is the default source; track 2 is bound to the meeting application's own
-``Stream/Output/Audio`` node, so music and notification sounds stay out of the
-mix. Verified on this machine: a plain ``pw-record --target <object.serial>``
-isolates one application at roughly 52 dB rejection of a second concurrent
-stream, and ``stream.capture.sink`` is neither needed nor wanted for that.
+Track 1 is the default source; track 2 is the meeting application's audio and
+nothing else, so music and notification sounds stay out of the mix. Two ways of
+getting that, in preference order:
+
+- **``process-sink``** (:mod:`munin.capture.private_sink`) -- a null sink of our
+  own, the application's output streams moved onto it, and a loopback so the
+  user still hears the call. This is the only mode that survives a
+  Chromium-based application: measured on 2026-09-15 in a real Teams call, the
+  process held five identical ``Stream/Output/Audio`` nodes at once and the one
+  seen at detection time was gone 12 s later.
+- **``stream``** -- one ``pw-record --target <object.serial>`` bound to the
+  application's node. Isolates cleanly (roughly 52 dB rejection of a second
+  concurrent stream, measured) for an application that keeps one stream, and is
+  what the app track falls back to when a private sink cannot be created.
 
 Every PipeWire tool needs ``XDG_RUNTIME_DIR`` in its environment or it fails
 without saying why; the systemd unit supplies it and this module asserts it.
@@ -54,6 +63,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, ClassVar, Literal, Sequence
 
+from munin.capture import private_sink
 from munin.capture.base import (
     SYSTEM_OUTPUT_HANDLE,
     CaptureError,
@@ -67,6 +77,7 @@ from munin.capture.base import (
 __all__ = [
     "AppSource",
     "PipewireCapturer",
+    "recover",
     "TrackHealth",
     "default_mic_target",
     "encode_command",
@@ -84,20 +95,23 @@ log = logging.getLogger("munin.capture")
 DEFAULT_HANDLE = "default"
 
 #: Where the app track's audio actually came from, once capture has started.
-AppSource = Literal["stream", "sink-monitor", "silent"]
+AppSource = Literal["process-sink", "stream", "sink-monitor", "silent"]
 
 
 def initial_app_source(app: CaptureTarget | None) -> AppSource:
     """What the app track will be before anything has been probed.
 
     No target means silence; :data:`SYSTEM_OUTPUT_HANDLE` asks for the sink
-    monitor outright (so no stream lookup is attempted and none can fail);
-    anything else names one application's stream.
+    monitor outright (so no stream lookup is attempted and none can fail); a
+    target that names a *process* gets that process its own sink; anything else
+    falls back to binding the one stream node the handle names.
     """
     if app is None:
         return "silent"
     if app.handle == SYSTEM_OUTPUT_HANDLE:
         return "sink-monitor"
+    if app.pid:
+        return "process-sink"
     return "stream"
 
 #: A bare Ogg-Opus header pair is about 150 bytes; anything smaller than this
@@ -553,6 +567,29 @@ def is_playable(path: Path, *, minimum: int = MIN_PLAYABLE_BYTES) -> bool:
         return False
 
 
+def recover(*, pactl: str = "pactl") -> list[str]:
+    """Clean up private sinks a previous ``munin-rec`` left loaded.
+
+    ``munin-rec`` SIGKILLed mid-meeting never reaches :meth:`PipewireCapturer.stop`,
+    so the null sink and its loopback stay loaded and the user is left listening
+    to the call through modules nobody owns -- or, worse, to nothing. The daemon
+    calls this at startup through :func:`munin.capture.recover_capture`, which
+    is the seam that keeps ``daemon.py`` from naming a platform.
+
+    Returns one line per thing it did, for the log. Never raises: a machine
+    without pactl, or without a session bus, simply has nothing to recover.
+    """
+    try:
+        env = _pipewire_env()
+    except CaptureError:
+        return []
+    try:
+        return private_sink.recover(pactl=pactl, env=env)
+    except Exception as exc:  # noqa: BLE001 - startup must not fail on cleanup
+        log.warning("could not recover leftover capture sinks: %s", exc)
+        return []
+
+
 # --------------------------------------------------------------------------
 # The capturer.
 # --------------------------------------------------------------------------
@@ -574,6 +611,7 @@ class PipewireCapturer(Capturer):
         pw_record: str = "pw-record",
         ffmpeg: str = "ffmpeg",
         pw_dump: str = "pw-dump",
+        pactl: str = "pactl",
     ) -> None:
         super().__init__(
             mic,
@@ -585,6 +623,9 @@ class PipewireCapturer(Capturer):
         self._pw_record = pw_record
         self._ffmpeg = ffmpeg
         self._pw_dump_tool = pw_dump
+        self._pactl = pactl
+        #: The private sink for ``process-sink`` mode, while one is open.
+        self._isolation: private_sink.PrivateSink | None = None
         self._tracks: dict[str, _Track] = {}
         self._running = False
         self._segment_index: int | None = None
@@ -615,17 +656,24 @@ class PipewireCapturer(Capturer):
         self.warnings = []
         self.app_source = initial_app_source(self.app)
 
-        # Pre-flight, and the reason it exists: pw-record does not fail when
-        # --target names a node that is not there. It records the default
-        # source instead -- which would fill the app track with the
+        # Pre-flight, twice over.
+        #
+        # ``process-sink`` has to build its sink before anything is spawned,
+        # because the recorder's --target is that sink's name. A sink that
+        # cannot be built is a fallback, never a failed recording.
+        if self.app_source == "process-sink" and not self._open_isolation():
+            self.app_source = self._fallback_after("process-sink") or "sink-monitor"
+
+        # And the reason the ``stream`` pre-flight exists: pw-record does not
+        # fail when --target names a node that is not there. It records the
+        # default source instead -- which would fill the app track with the
         # microphone. Measured on this machine; there is no pw-record flag
         # that changes it. So the only safe binding is one we looked up first.
         if self.app_source == "stream" and not self._app_stream_bindable():
-            self.warnings.append(
+            self._warn(
                 f"{self.app.label} stream {self.app.handle} is gone; "
                 "falling back to the sink monitor"
             )
-            log.warning("%s", self.warnings[-1])
             self.app_source = "sink-monitor"
 
         # Audio starts flowing the moment the recorders are up, not after the
@@ -646,26 +694,29 @@ class PipewireCapturer(Capturer):
         if not mic_track.alive():
             detail = mic_track.health().detail
             self._teardown([mic_track, app_track])
+            self._close_isolation()
             raise CaptureError(
                 f"microphone capture failed to start ({self.mic.label}): {detail}"
             )
 
-        if not app_track.alive():
-            detail = app_track.health().detail
-            log.warning("app track (%s) failed to start: %s", self.app_source, detail)
-            self.warnings.append(f"app track ({self.app_source}) failed to start: {detail}")
+        # Down the ladder -- process-sink, stream, sink-monitor, silence --
+        # until something starts. Never up: a recording with the microphone on
+        # it beats a recording that refused to begin.
+        while not app_track.alive():
+            self._warn(
+                f"app track ({self.app_source}) failed to start: "
+                f"{app_track.health().detail}"
+            )
             self._teardown([app_track])
-            if self.app_source == "stream":
-                self.app_source = "sink-monitor"
-                app_track = self._spawn_app_track(app_path, env=env)
+            if self.app_source == "process-sink":
+                self._close_isolation()
+            nxt = self._fallback_after(self.app_source)
+            if nxt is None:
+                break
+            self.app_source = nxt
+            app_track = self._spawn_app_track(app_path, env=env)
+            if app_track.recorder is not None:
                 time.sleep(START_PROBE_SECONDS)
-            if not app_track.alive():
-                detail = app_track.health().detail
-                log.warning("sink monitor fallback also failed: %s", detail)
-                self.warnings.append(f"sink monitor fallback failed: {detail}")
-                self._teardown([app_track])
-                self.app_source = "silent"
-                app_track = self._spawn_app_track(app_path, env=env)
 
         app_track.source = self.app_source
         self._tracks = {"mic": mic_track, "app": app_track}
@@ -692,6 +743,11 @@ class PipewireCapturer(Capturer):
         for track in self._tracks.values():
             track.stopped = True
             shutdown_chain(track.recorder, track.encoder)
+
+        # The audio goes back to the user's own sink the moment the recorders
+        # are down, before anything slower happens: not one second of a meeting
+        # the user cannot hear is worth a tidier stop sequence.
+        self._close_isolation()
 
         started_at = self._started_at or stopped_at
         segment_index = self._segment_index or 1
@@ -775,8 +831,17 @@ class PipewireCapturer(Capturer):
         ``None`` means the question does not apply (no application was bound,
         or the track is the sink monitor or silence) or that PipeWire could not
         be asked, which must never be read as "the meeting ended".
+
+        In ``process-sink`` mode the question is asked of the *process*, not of
+        one node: whether it still holds any output stream at all. A Chromium
+        application recycles its nodes several times during a call, so a
+        per-node answer would report the meeting over while it is running.
         """
-        if self.app is None or self.app_source != "stream":
+        if self.app is None:
+            return None
+        if self.app_source == "process-sink":
+            return self._isolation.streams_present() if self._isolation else None
+        if self.app_source != "stream":
             return None
         dump = _pw_dump(self._pw_dump_tool)
         if dump is None:
@@ -784,7 +849,7 @@ class PipewireCapturer(Capturer):
         return stream_exists(dump, self.app.handle)
 
     def describe(self) -> dict[str, str]:
-        return {
+        described = {
             "method": self.method,
             "mic": self.mic.label,
             "mic_handle": self.mic.handle,
@@ -795,14 +860,87 @@ class PipewireCapturer(Capturer):
             "sample_rate": str(self.sample_rate),
             "channels": str(self.channels),
             "state": "running" if self._running else "idle",
-            "warnings": "; ".join(self.warnings) or "(none)",
         }
+        if self._isolation is not None:
+            # Which sink, how much of the application is on it, and how many
+            # times we had to move something there. The last number is the
+            # honest measure of how restless the application is.
+            described.update(self._isolation.describe())
+        described["warnings"] = "; ".join(self.warnings) or "(none)"
+        return described
 
     # -- plumbing ---------------------------------------------------------
 
     def _spawn(self, argv: Sequence[str], **kwargs: Any) -> subprocess.Popen[bytes]:
         """Single seam for spawning, so tests can stand in a fake process."""
         return subprocess.Popen(list(argv), **kwargs)
+
+    def _warn(self, message: str) -> None:
+        log.warning("%s", message)
+        if message not in self.warnings:
+            self.warnings.append(message)
+
+    def _fallback_after(self, source: AppSource) -> AppSource | None:
+        """The next app-track mode to try once ``source`` has failed.
+
+        One way down: ``process-sink`` -> ``stream`` (only when there really is
+        a node to bind) -> ``sink-monitor`` -> ``silent``. Each step records
+        less of the meeting and more of everything else, which is why the
+        daemon is told about it (contracts section 3) rather than it being a
+        quiet internal retry.
+        """
+        if source == "process-sink":
+            handle = self.app.handle if self.app else ""
+            if handle and handle not in (SYSTEM_OUTPUT_HANDLE, DEFAULT_HANDLE):
+                if self._app_stream_bindable():
+                    return "stream"
+            return "sink-monitor"
+        if source == "stream":
+            return "sink-monitor"
+        if source == "sink-monitor":
+            return "silent"
+        return None
+
+    def _open_isolation(self) -> bool:
+        """Build this recording's private sink and move the app onto it."""
+        if self.app is None or not self.app.pid:
+            return False
+        sink = private_sink.PrivateSink(
+            str(self.app.pid),
+            int(self.app.pid),
+            # Deliberately generic: this string shows up in every volume mixer
+            # on the machine, so it must never carry the meeting's title.
+            description="Munin meeting audio",
+            pactl=self._pactl,
+            env=_pipewire_env(),
+        )
+        opened = False
+        try:
+            opened = sink.open()
+        except Exception as exc:  # noqa: BLE001 - isolation must not fail a recording
+            log.warning("could not isolate %s: %s", self.app.label, exc)
+        for warning in sink.warnings:
+            self._warn(warning)
+        if not opened:
+            self._warn(
+                f"could not give {self.app.label} a private sink; "
+                "falling back to a wider app track"
+            )
+            return False
+        self._isolation = sink
+        return True
+
+    def _close_isolation(self) -> None:
+        """Put the application's audio back, and unload what we loaded."""
+        sink, self._isolation = self._isolation, None
+        if sink is None:
+            return
+        try:
+            for warning in sink.close():
+                self._warn(warning)
+        except Exception as exc:  # noqa: BLE001 - a stop must still complete
+            log.error("could not take down the private sink: %s", exc)
+            self._warn(f"could not take down the private sink {sink.name}: {exc}")
 
     def _app_stream_bindable(self) -> bool:
         """Is the app's stream node there to bind, right now?
@@ -823,11 +961,25 @@ class PipewireCapturer(Capturer):
             return self._silent_track("app", path)
         if self.app_source == "sink-monitor":
             return self._spawn_recorded_track(
-                "app", path, None, env=env, capture_sink=True
+                "app", path, None, env=env, capture_sink=True, source="sink-monitor"
+            )
+        if self.app_source == "process-sink":
+            assert self._isolation is not None
+            # The sink's *name*, not ``<name>.monitor``: measured here, the
+            # ``.monitor`` spelling is a PulseAudio compatibility name that
+            # pw-record cannot resolve, and it silently recorded the
+            # microphone instead. ``stream.capture.sink`` is what taps a sink.
+            return self._spawn_recorded_track(
+                "app",
+                path,
+                self._isolation.name,
+                env=env,
+                capture_sink=True,
+                source="process-sink",
             )
         assert self.app is not None  # "stream" is only reachable with an app
         return self._spawn_recorded_track(
-            "app", path, self.app.handle, env=env, capture_sink=False
+            "app", path, self.app.handle, env=env, capture_sink=False, source="stream"
         )
 
     def _spawn_recorded_track(
@@ -838,6 +990,7 @@ class PipewireCapturer(Capturer):
         *,
         env: dict[str, str],
         capture_sink: bool,
+        source: AppSource | None = None,
     ) -> _Track:
         recorder_argv = record_command(
             handle,
@@ -879,7 +1032,7 @@ class PipewireCapturer(Capturer):
         return _Track(
             kind=kind,
             path=path,
-            source="sink-monitor" if capture_sink else "stream",
+            source=source or ("sink-monitor" if capture_sink else "stream"),
             encoder=encoder,
             encoder_argv=encoder_argv,
             recorder=recorder,

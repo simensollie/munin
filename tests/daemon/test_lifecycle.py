@@ -598,3 +598,35 @@ def test_an_isolated_stream_says_nothing(harness: Harness) -> None:
     )
     daemon.handle_start({"from_detection": True})
     assert "Recording all desktop audio" not in harness.titles()
+
+
+def test_a_private_sink_is_isolated_too(harness: Harness) -> None:
+    """``process-sink`` holds one application, so there is nothing to warn about."""
+    from .fakes import FakeCapturer
+
+    daemon = harness.daemon
+
+    def isolated(mic, app):
+        capturer = FakeCapturer(mic, app, clock=harness.clock)
+        capturer.app_source = "process-sink"
+        return capturer
+
+    daemon.capturer_factory = isolated  # type: ignore[assignment]
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+
+    assert "Recording all desktop audio" not in harness.titles()
+    assert daemon.state.last_error is None
+
+
+def test_the_detected_call_hands_the_capturer_its_pid(harness: Harness) -> None:
+    """Without the pid the capturer cannot give the application its own sink."""
+    daemon = harness.daemon
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    assert daemon.capturer.app.pid == 4242  # type: ignore[union-attr]
+    assert daemon.capturer.app.handle == "9911"  # type: ignore[union-attr]

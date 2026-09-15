@@ -28,6 +28,7 @@ __all__ = [
     "Capturer",
     "SessionRef",
     "get_capturer",
+    "recover_capture",
     "segment_filenames",
 ]
 
@@ -36,6 +37,31 @@ _MODULES: dict[str, tuple[str, str]] = {
     "darwin": ("munin.capture.macos", "ScreenCaptureKitCapturer"),
     "win32": ("munin.capture.windows", "WasapiCapturer"),
 }
+
+
+def recover_capture(platform: str | None = None) -> list[str]:
+    """Undo whatever a crashed capture left behind on the audio server.
+
+    The Linux capturer gives each recording a private sink and moves the
+    meeting application's streams onto it; a daemon that was SIGKILLed
+    mid-meeting never puts them back. This is the platform-free seam the daemon
+    calls at startup so that it never has to know that. A platform module
+    without a ``recover`` has nothing to undo, which is not an error.
+
+    Returns one human-readable line per action taken, for the log.
+    """
+    key = platform or sys.platform
+    entry = _MODULES.get(key)
+    if entry is None:
+        return []
+    try:
+        module = importlib.import_module(entry[0])
+    except (ImportError, NotImplementedError):
+        return []
+    recover = getattr(module, "recover", None)
+    if recover is None:
+        return []
+    return list(recover() or [])
 
 
 def get_capturer(platform: str | None = None) -> type[Capturer]:

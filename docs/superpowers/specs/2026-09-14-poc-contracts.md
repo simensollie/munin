@@ -201,7 +201,7 @@ by state (§4).
       "started_at": "2026-09-14T13:56:10+02:00",
       "stopped_at": "2026-09-14T14:02:11+02:00",
       "duration_seconds": 361.0,
-      "app_source": "sink-monitor"
+      "app_source": "process-sink"
     }
   ],
   "checksums": { "mic.opus": "sha256:…", "app.opus": "sha256:…" },
@@ -227,7 +227,7 @@ Field rules:
 | `app` | `null` for a pure ad-hoc session with no identified app. Otherwise every key present, `null` where unknown. |
 | `calendar_event_id` | Always `null` in the PoC. The key exists so the schema does not change at M9. |
 | `segments` | Never empty once `state` has left `recording` successfully. `index` is 1-based and contiguous. |
-| `segments[].app_source` | **Added at integration (§16).** What the app track actually holds: `"stream"` (the meeting application's own audio and nothing else), `"sink-monitor"` (the whole desktop mix, taken because the application's stream could not be bound) or `"silent"` (a generated silent track, an ad-hoc session with no application). `null` means a capturer that does not report one — read as *unknown*, never as *isolated*. |
+| `segments[].app_source` | **Added at integration (§16); `process-sink` added in §16.6.** What the app track actually holds: `"process-sink"` (the meeting application moved onto a sink of its own — one process and nothing else, whatever it does to its streams), `"stream"` (one of the application's stream nodes, bound directly — also isolated, but only for an application that keeps one stream), `"sink-monitor"` (the whole desktop mix, taken because neither of the above could be had) or `"silent"` (a generated silent track, an ad-hoc session with no application). `null` means a capturer that does not report one — read as *unknown*, never as *isolated*. **`process-sink` and `stream` are the isolated values**; the daemon treats everything else as a widened capture and says so while it is happening. |
 | `checksums` | `sha256:<hex>` per audio file, keyed by filename, computed by the daemon at `captured`. |
 | `pending_reason` | Non-null only in state `pending`. Human-readable, one sentence. |
 | `error` | Non-null only in state `failed`: `{ "code": "...", "message": "...", "at": "..." }`. |
@@ -240,7 +240,7 @@ implementation; nothing else may construct these names.
 
 `mixed.mp3`, `transcript.*` and `markers.json` are not produced in the PoC.
 
-**Why `app_source` is on the record.** The three values are not interchangeable.
+**Why `app_source` is on the record.** The four values are not interchangeable.
 A `sink-monitor` track is the whole desktop mix: other applications, other
 people's audio, notification sounds — material that was never part of the
 meeting and whose subjects never saw a recording prompt. That is a GDPR and
@@ -361,10 +361,28 @@ Rules the implementation must honour:
 
 - Mic: `pw-record --target <serial|default> --format s16 --rate <rate> --channels 1 -`
   piped into `ffmpeg -f s16le -ar <rate> -ac 1 -i pipe:0 -c:a libopus -b:a 24k <out>.opus`.
-- App: the same, with `--target <object.serial of the app's Stream/Output/Audio node>`.
-  A plain `--target` on the stream node isolates that one application cleanly
-  (measured ~52 dB rejection of a second concurrent stream); `stream.capture.sink`
-  is **not** needed and must not be used.
+- App: the same pipe, in one of four modes, tried strictly in this order and
+  never upwards. Each step down records less of the meeting and more of
+  everything else, so each is reported as `segments[].app_source` and the
+  daemon notifies below `stream` (§8).
+
+  | Order | `app_source` | How | Chosen when |
+  |---|---|---|---|
+  | 1 | `process-sink` | A `module-null-sink` named `munin-app-<pid>`, a `module-loopback` from its monitor so the user still hears the call, every output stream of the target process moved onto it, and `pw-record --target munin-app-<pid> -P "{ stream.capture.sink = true, node.dont-reconnect = true }"`. §16.6. | The app `CaptureTarget` carries a `pid`. |
+  | 2 | `stream` | `--target <object.serial of the app's Stream/Output/Audio node>`, no `stream.capture.sink`. Isolates one application cleanly (measured ~52 dB rejection of a second concurrent stream) — but only an application that keeps one stream node, which Chromium does not (§16.6). | No pid, or a private sink could not be created, *and* the handle still names a live node. |
+  | 3 | `sink-monitor` | `stream.capture.sink = true` with no `--target`: the whole desktop mix. | Asked for outright via `SYSTEM_OUTPUT_HANDLE` (§16.5), or everything above failed. |
+  | 4 | `silent` | A generated silent Opus file of the segment's measured duration. | No application at all, or every mode above failed. |
+
+- The app track always carries `node.dont-reconnect = true`. Measured: without
+  it, a `--target` that disappears makes `pw-record` **silently record the
+  default source** — the user's own microphone on the meeting track. With it the
+  track goes to true digital silence instead.
+- `--target <sink>.monitor` does **not** work for mode 1: `.monitor` is a
+  PulseAudio-compatibility name pw-record cannot resolve, and it recorded the
+  microphone. The sink's own name plus `stream.capture.sink` is the form.
+- The daemon calls `munin.capture.recover_capture()` at startup (the
+  platform-free seam) so that private sinks a SIGKILLed `munin-rec` left loaded
+  are unloaded and any stream still on one is moved back to the default sink.
 - `XDG_RUNTIME_DIR` must be set in the child environment or every PipeWire tool
   fails silently. The daemon gets it from systemd (`Environment=XDG_RUNTIME_DIR=%t`);
   the capturer must still assert it and raise `CaptureError` with a clear message
@@ -1057,3 +1075,83 @@ output mix is exactly the material D2 wanted to keep out of the meeting track
 condition 1 alone. Accepted because a meeting track with nothing on it cannot
 be repaired afterwards, the session says which kind of track it holds, and the
 user is told while they can still stop.
+
+### 16.6 A private sink per recording, because Chromium has five streams
+
+**The measurement that forced this.** On 2026-09-15, during a real Microsoft
+Teams call in the Electron client (Chromium), the process held **five**
+identical `Stream/Output/Audio` nodes named "Playback" at the same time, and the
+node the detector had seen at call start was **gone 12 s later**. The app track
+therefore fell back to the desktop-sink monitor: every application's audio,
+which is the one outcome spec §6.1 exists to prevent ("bound to the specific
+sink-input rather than the whole system output, so music and notification sounds
+stay out of the mix"). Binding by stream cannot work for a Chromium-based
+application, and all three Teams shapes on this machine are Chromium.
+
+**The design.** Do not follow the application's streams; give the recording a
+sink and move the application onto it. New `app_source` value `"process-sink"`,
+chosen whenever the app `CaptureTarget` carries a `pid` (both the detected and
+the adopted-call paths do). Per segment:
+
+1. `pactl load-module module-null-sink sink_name=munin-app-<pid> sink_properties=device.description=Munin_meeting_audio`.
+2. `pactl load-module module-loopback source=munin-app-<pid>.monitor latency_msec=30 source_dont_move=true` — so the user still hears the call. Deliberately **not** pinned with `sink=`: measured, an unpinned loopback follows a default-sink change (its sink-input moved to a new default and back within 1.5 s), which is what switching to headphones mid-meeting needs. `source_dont_move` pins the other end, because a loopback that wandered off our monitor would put the meeting into the speakers twice and the recording nowhere.
+3. Every output stream of the process is moved with `pactl move-sink-input <index> munin-app-<pid>`, remembering the sink it came from. A process's streams are found by pid: `application.process.id` on the sink-input when present, otherwise through `client` → the Client object's `application.process.id`, otherwise its `pipewire.sec.pid`. All three are needed — measured, a *native* PipeWire client (`pw-play`) publishes no `application.process.id` on the stream at all, and for a *PulseAudio* client `pipewire.sec.pid` is the pipewire-pulse daemon (1125 here), not the application. A bounded two-hop parent walk also claims a child process's streams, because Chromium's audio process is a child of the window process.
+4. A 1.5 s watcher thread keeps moving streams the application creates later. The daemon's health tick is 5 s, which would leave up to five seconds of a new Chromium stream going to the speakers and not into the recording. Measured in the live check: one 8 s Chromium capture needed **two** moves for one stream.
+5. `pw-record --target munin-app-<pid> -P "{ stream.capture.sink = true, node.dont-reconnect = true }"` records the sink's monitor.
+
+**Teardown, and the order is the point.** Streams back to the sink they came
+from (or, if that sink is gone, to the current default) → unload the loopback →
+unload the null sink. Unloading the sink first would leave the application
+playing into something that no longer reaches the speakers. Every step tolerates
+failure, logs it, and reports it in `warnings` and `describe()`; a failure to
+clean up never fails a recording.
+
+**Crash recovery.** `munin-rec` SIGKILLed mid-meeting never reaches `stop()`.
+`munin.capture.recover_capture()` runs at daemon startup, finds `munin-app-*`
+null sinks and their loopbacks in `pactl list modules short`, moves any stream
+still sitting on one back to the default sink, then unloads loopbacks before
+sinks. Verified live: after a SIGKILL the tone player was stranded on
+`munin-app-<pid>`; recovery moved it back and unloaded both modules.
+
+**Fallbacks.** Missing `pactl`, a failed `load-module`, or a recorder that dies
+on the private sink drops to `stream` (when the handle still names a live node),
+then `sink-monitor`, then `silent` — with the existing warnings and the
+"Recording all desktop audio" notification. Isolation is an improvement, never a
+precondition for recording.
+
+**`app_stream_present()`** in this mode answers whether the *process* still holds
+any output stream, not whether one node survives, and `None` when PipeWire
+cannot be asked. A per-node answer would report the meeting over every time
+Chromium recycled a stream.
+
+**Measured on this machine, 2026-09-15** (440 Hz "meeting", 880 Hz "music"
+playing at the same time; tone magnitudes by Goertzel, not a filter bank):
+
+| Run | App track 440 Hz | App track 880 Hz | Rejection |
+|---|---|---|---|
+| `pw-play` as the meeting, capturer driven directly | −21.1 dB | −100.7 dB | **79.6 dB** |
+| The same through `munin-rec` (`munin event` + `munin start`) | −21.1 dB | −98.8 dB | **77.8 dB** |
+| A real Chromium tab as the meeting, `pw-play` as the music | −15.6 dB | −108.3 dB | **92.6 dB** |
+
+The microphone track in each run was −57 dB of quiet room with neither tone on
+it. `pactl move-sink-input` did not refuse the Chromium stream.
+
+**Counterargument, and it is a real one.** This reroutes live audio the user is
+listening to and puts a 30 ms loopback in the path. A bug here is *audible*: at
+worst the meeting goes silent in the user's ears, which is worse than a widened
+recording and worse than no recording at all. Three things are the answer, and
+none of them is "it should be fine": the teardown order never leaves the
+application on a sink that does not reach the speakers; recovery cleans up a
+killed daemon's modules at the next startup; and PipeWire itself moves an
+orphaned stream to the default sink when the private sink is unloaded (measured
+— the failure mode is a quiet track, never silent speakers). Two smaller costs
+are accepted: 30 ms of added latency on the user's own monitoring, and a sink
+named `munin-app-<pid>` visible in every volume mixer on the machine while a
+meeting is being recorded. Its description is deliberately the generic "Munin
+meeting audio" and never the meeting's title.
+
+**Not verified.** A real Teams call *through* this mode (the measurement above
+used a Chromium tab playing a tone, not a call), whether five concurrent
+Chromium streams all move cleanly under load, and the behaviour when the user
+changes the default sink while a recording is running (the loopback was measured
+following a default-sink change, but not during a capture).

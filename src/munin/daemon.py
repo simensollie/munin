@@ -273,6 +273,11 @@ def _write_silence(path: Path, seconds: float, rate: int, bitrate_kbps: int) -> 
         path.write_bytes(b"")
 
 
+#: ``segments[].app_source`` values that mean "this application and nothing
+#: else" (contracts section 3). Anything outside this set widened the capture
+#: beyond the meeting, and the user is told while they can still stop.
+ISOLATED_APP_SOURCES = frozenset({"process-sink", "stream"})
+
 CapturerFactory = Callable[[CaptureTarget, CaptureTarget | None], Capturer]
 Notifier = Callable[[Notification], bool]
 Runner = Callable[[Sequence[str]], int]
@@ -870,6 +875,17 @@ class Daemon:
 
         Guarded: one unreadable session must not stop the daemon from binding.
         """
+        # The audio server first: a killed daemon can leave the meeting
+        # application's audio routed through a capture device that no longer
+        # has an owner, which the user hears (or stops hearing) immediately.
+        try:
+            from munin.capture import recover_capture
+
+            for note in recover_capture():
+                log.info("capture recovery: %s", note)
+        except Exception as exc:  # noqa: BLE001 - never block startup on cleanup
+            log.warning("capture recovery failed error=%s", exc)
+
         try:
             recovered = self.spool.recover_for_daemon()
         except Exception as exc:  # noqa: BLE001 - a broken session is not fatal
@@ -1152,7 +1168,7 @@ class Daemon:
             self.notifier(notify.recording_system_output(session_id=self.state.session_id))
             return
         source = _describe_app_source(capturer)
-        if source is None or source == "stream":
+        if source is None or source in ISOLATED_APP_SOURCES:
             return
         log.warning(
             "the app track is %s, not %s's own stream session=%s",

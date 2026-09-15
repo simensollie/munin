@@ -1,0 +1,38 @@
+[
+  {
+    "index": 33,
+    "properties": {
+      "application.name": "pipewire",
+      "application.process.id": "1125",
+      "pipewire.sec.pid": "1125",
+      "application.process.binary": "pipewire"
+    }
+  },
+  {
+    "index": 7778,
+    "properties": {
+      "application.name": "paplay",
+      "application.process.id": "9107",
+      "pipewire.sec.pid": "1125",
+      "application.process.binary": "pacat"
+    }
+  },
+  {
+    "index": 7779,
+    "properties": {
+      "application.name": "pw-cat",
+      "application.process.id": "9102",
+      "pipewire.sec.pid": "9102",
+      "application.process.binary": "pw-cat"
+    }
+  },
+  {
+    "index": 7780,
+    "properties": {
+      "application.name": "pw-cat",
+      "application.process.id": "9101",
+      "pipewire.sec.pid": "9101",
+      "application.process.binary": "pw-cat"
+    }
+  }
+]

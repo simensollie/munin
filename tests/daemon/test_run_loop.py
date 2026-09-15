@@ -384,6 +384,7 @@ def test_an_adhoc_start_binds_the_live_call_it_finds(harness: Harness) -> None:
     capturer = daemon.capturer
     assert capturer is not None and capturer.app is not None
     assert capturer.app.handle == "57", "the app track is the call's own stream"
+    assert capturer.app.pid == 4242, "and the process, so it can have its own sink"
     assert capturer.app.app_id == "beacon-tab"
     session = harness.session_json(started["session_id"])
     assert session["source"] == "adhoc", "the user started it, not a detection"

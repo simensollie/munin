@@ -1,0 +1,39 @@
+[
+  {
+    "index": 7781,
+    "client": "7779",
+    "sink": 57,
+    "properties": {
+      "application.name": "pw-play",
+      "node.name": "pw-play",
+      "media.name": "/home/example/tone-880.wav",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "7781"
+    }
+  },
+  {
+    "index": 7782,
+    "client": "7780",
+    "sink": 57,
+    "properties": {
+      "application.name": "pw-play",
+      "node.name": "pw-play",
+      "media.name": "/home/example/tone-440.wav",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "7782"
+    }
+  },
+  {
+    "index": 7783,
+    "client": "7778",
+    "sink": 57,
+    "properties": {
+      "application.name": "paplay",
+      "application.process.id": "9107",
+      "application.process.binary": "pacat",
+      "media.name": "/home/example/tone-440.wav",
+      "media.class": "Stream/Output/Audio",
+      "object.serial": "7783"
+    }
+  }
+]

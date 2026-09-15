@@ -1,0 +1,5 @@
+10	module-device-restore	
+11	module-stream-restore	
+536870916	module-null-sink	sink_name=munin-app-4310 sink_properties=device.description=Munin_meeting_audio	
+536870917	module-loopback	source=munin-app-4310.monitor latency_msec=30 source_dont_move=true	
+536870918	module-null-sink	sink_name=someone-elses-sink	

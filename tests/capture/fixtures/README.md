@@ -25,5 +25,22 @@ window pid.
 the `/proc/<pid>/status` `PPid` map the parent walk needs, so that walk is
 tested without a single real process.
 
-Every dump also contains the shell's own `quickshell` node, which holds a
-capture stream permanently and must never be mistaken for a call.
+Every `pw-dump` above also contains the shell's own `quickshell` node, which
+holds a capture stream permanently and must never be mistaken for a call.
+
+## Capture fixtures (`pactl`)
+
+The private-sink app track (contracts §16.6) reads `pactl`, not `pw-dump`,
+because only `pactl` says which sink a stream is currently going to — which is
+what putting the audio back at the end of a meeting needs.
+
+| File | Shape | Carries |
+|---|---|---|
+| `pactl-sink-inputs-two-players.json` + `pactl-clients-two-players.json` | two native `pw-play` streams and one PulseAudio `paplay` stream | that a native PipeWire client publishes **no** `application.process.id` on the stream, only on its Client, while a PulseAudio client publishes it on both |
+| `pactl-sink-inputs-chromium.json` + `pactl-clients-chromium.json` | one Chromium process holding five identical "Playback" streams, plus another application's stream | the measured Chromium shape, and that `pipewire.sec.pid` on such a client is the pulse daemon rather than the application |
+| `pactl-sinks.json` | the hardware sink and one `munin-app-*` private sink | name → index, for moving a stream back |
+| `pactl-modules-stale.txt` | `pactl list modules short` after a killed daemon | a leftover null sink, its loopback, and a third-party null sink that must be left alone |
+
+The Chromium pid (4310) is the same synthetic audio-process pid the detection
+fixtures use, so `ppid-map.json` covers the parent walk for these too.
+
