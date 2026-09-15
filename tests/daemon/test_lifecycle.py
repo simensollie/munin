@@ -75,7 +75,7 @@ def test_detect_record_grace_autostop_resume(harness: Harness) -> None:
     clock.advance(31)
     daemon.tick()
     daemon.tick()
-    assert harness.titles() == ["Meeting detected", "Meeting looks finished"]
+    assert harness.titles() == ["Meeting detected", "Meeting seems over"]
     assert harness.notifications[-1].action == ("munin", "stop")
 
     # 6. The grace period expires and the recording stops by itself (D14).
@@ -542,12 +542,12 @@ def test_a_dead_app_track_is_reported_once_and_keeps_the_microphone(
 
     daemon.tick()
     assert daemon.state.state == "recording"
-    assert harness.titles()[-1] == "A recording track stopped"
+    assert harness.titles()[-1] == "Recording problem"
     assert _valid_state_file(harness)["last_error"]
 
     clock.advance(600)
     daemon.tick()
-    assert harness.titles().count("A recording track stopped") == 1, (
+    assert harness.titles().count("Recording problem") == 1, (
         "a dead process stays dead; do not notify on every tick"
     )
 
@@ -562,11 +562,11 @@ def test_health_is_not_polled_more_often_than_it_can_change(harness: Harness) ->
 
     clock.advance(HEALTH_POLL_SECONDS - 1)
     daemon.tick()
-    assert "A recording track stopped" not in harness.titles()
+    assert "Recording problem" not in harness.titles()
 
     clock.advance(2)
     daemon.tick()
-    assert harness.titles().count("A recording track stopped") == 1
+    assert harness.titles().count("Recording problem") == 1
 
 
 def test_a_widened_app_capture_says_so_while_it_is_happening(harness: Harness) -> None:
@@ -586,7 +586,7 @@ def test_a_widened_app_capture_says_so_while_it_is_happening(harness: Harness) -
     )
     daemon.handle_start({"from_detection": True})
 
-    assert harness.titles()[-1] == "Recording the whole desktop"
+    assert harness.titles()[-1] == "Recording all desktop audio"
     assert harness.notifications[-1].urgency == "critical"
     assert daemon.state.state == "recording", "a warning is not a failure"
 
@@ -597,4 +597,4 @@ def test_an_isolated_stream_says_nothing(harness: Harness) -> None:
         {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
     )
     daemon.handle_start({"from_detection": True})
-    assert "Recording the whole desktop" not in harness.titles()
+    assert "Recording all desktop audio" not in harness.titles()

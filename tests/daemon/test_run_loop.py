@@ -390,7 +390,7 @@ def test_an_adhoc_start_binds_the_live_call_it_finds(harness: Harness) -> None:
     assert session["app"]["app_id"] == "beacon-tab"
     assert session["app"]["pid"] == 4242
     assert harness.state_json()["detected_app"]["pid"] == 4242
-    assert "Recording everything this machine plays" not in harness.titles()
+    assert "No meeting found, recording desktop audio" not in harness.titles()
 
 
 def test_an_adhoc_start_adopts_a_single_unidentified_call(harness: Harness) -> None:
@@ -427,7 +427,7 @@ def test_an_adhoc_start_with_no_call_records_the_output_mix_and_says_so(
     capturer = daemon.capturer
     assert capturer.app is not None
     assert capturer.app.handle == SYSTEM_OUTPUT_HANDLE
-    assert "Recording everything this machine plays" in harness.titles()
+    assert "No meeting found, recording desktop audio" in harness.titles()
     assert harness.state_json()["last_error"] is None, "asked for, not a failure"
     assert harness.session_json(started["session_id"])["app"] is None
 
@@ -441,7 +441,7 @@ def test_adhoc_app_source_silent_keeps_the_old_behaviour(harness: Harness) -> No
     )
     daemon.handle_start({"title": "Ad hoc"})
     assert daemon.capturer.app is None
-    assert "Recording everything this machine plays" not in harness.titles()
+    assert "No meeting found, recording desktop audio" not in harness.titles()
 
 
 def test_a_broken_detector_never_blocks_an_adhoc_start(harness: Harness) -> None:

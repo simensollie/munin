@@ -68,7 +68,8 @@ var STALE_AFTER_SECONDS = 90;
 // read config.toml itself -- it has no TOML parser and no business owning the
 // user's config -- which is why the daemon publishes the resolved table.
 var DEFAULT_APP_RULES = [
-    { app_id: "teams-native", label: "Microsoft Teams", client_name: "Teams" },
+    { app_id: "teams-native", label: "Microsoft Teams", client_name: "Teams",
+      binary: "teams-for-linux" },
     { app_id: "teams-pwa", label: "Microsoft Teams",
       window_class: "chrome-teams.microsoft.com__-Default" },
     { app_id: "teams-tab", label: "Microsoft Teams",
@@ -399,7 +400,7 @@ function tooltipText(view, nowMs) {
     case "recording":
         return "Recording " + title;
     case "ending":
-        return "Streams gone from " + title + ". Stops by itself shortly.";
+        return "Meeting seems over: " + title + ". Recording stops soon.";
     case "captured":
     case "transcribing":
         if (deferred(view, nowMs)) {

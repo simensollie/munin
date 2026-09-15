@@ -614,7 +614,7 @@ Panel {
         switch (root.barState) {
         case "detected": return "A call is live. Munin is not recording.";
         case "recording": return "Recording, two tracks.";
-        case "ending": return "Streams gone. Stops by itself shortly.";
+        case "ending": return "Meeting seems over. Recording stops soon.";
         case "captured":
         case "transcribing":
             return root.status.queue_depth + " in the queue, audio safe on disk.";

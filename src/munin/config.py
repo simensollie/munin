@@ -47,7 +47,15 @@ class ConfigError(RuntimeError):
 #: another meeting application is a row here or in the user's file, never code
 #: (D13).
 DEFAULT_APP_RULES: tuple[AppRule, ...] = (
-    AppRule(app_id="teams-native", label="Microsoft Teams", client_name="Teams"),
+    # Measured 2026-09-15: teams-for-linux publishes application.name "Chromium"
+    # and application.process.binary "teams-for-linux"; the binary is what
+    # identifies it, the client name is kept for a build that says "Teams".
+    AppRule(
+        app_id="teams-native",
+        label="Microsoft Teams",
+        client_name="Teams",
+        binary="teams-for-linux",
+    ),
     AppRule(
         app_id="teams-pwa",
         label="Microsoft Teams",
@@ -118,6 +126,7 @@ resume_window_seconds = 600
 app_id      = "teams-native"
 label       = "Microsoft Teams"
 client_name = "Teams"
+binary      = "teams-for-linux"   # what the native client actually reports
 
 [[detection.apps]]
 app_id       = "teams-pwa"

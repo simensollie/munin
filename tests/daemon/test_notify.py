@@ -25,8 +25,8 @@ def test_detected_offers_start_from_detection() -> None:
 
 def test_ending_soon_offers_stop() -> None:
     note = notify.ending_soon(60, session_id="2026-09-14T1325-weekly-quality-sync")
-    assert note.title == "Meeting looks finished"
-    assert note.body == "Stops by itself in 1:00"
+    assert note.title == "Meeting seems over"
+    assert note.body == "Recording stops in 1:00. Click to stop now."
     assert note.action == ("munin", "stop")
     assert note.timeout_ms == 60000
 
@@ -34,7 +34,7 @@ def test_ending_soon_offers_stop() -> None:
 def test_auto_stopped_always_offers_resume() -> None:
     note = notify.auto_stopped(37)
     assert note.title == "Recording stopped"
-    assert note.body == "37 min captured, queued for transcription"
+    assert note.body == "37 min saved. Click to resume."
     assert note.action == ("munin", "start", "--resume")
     assert note.urgency == "normal"
 

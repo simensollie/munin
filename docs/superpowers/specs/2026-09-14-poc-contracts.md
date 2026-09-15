@@ -574,12 +574,12 @@ which is what "offered alongside rather than instead" already promised.
 
 | When | Urgency | Title / body | Primary action (`--exec`) | Secondaries live in |
 |---|---|---|---|---|
-| Call detected | `normal`, `-t 30000` | "Meeting detected" / app label and time | `munin start --from-detection` | Panel: *Not this one* (dismiss). *Never for this meeting* is deferred — it needs the calendar series id (M9). |
-| Streams gone 1 min (`warn_seconds`) | `normal`, `-t 60000` | "Meeting looks finished" / "Stops by itself at 2:00" | `munin stop` | Panel and keybind: *Keep recording* (`munin start --resume` is not it — the session is still recording; the panel calls `munin event call-started` to cancel the grace period). |
-| Auto-stopped | `critical` on failure, else `normal` | "Recording stopped" / "*n* min captured, queued for transcription" | `munin start --resume` | Panel: *Open session*. |
-| A capture track died mid-meeting | `critical` | "A recording track stopped" / which track, and that the rest is still being captured | `munin stop` | — (once per track per session; a dead microphone ends the session instead and notifies as *Auto-stopped*). |
-| The app stream could not be bound | `critical` | "Recording the whole desktop" / the application's own audio could not be bound, so the meeting track holds everything this machine plays | `munin stop` | — (spec §12: a sink-monitor track holds people who were never in the meeting, and telling the user afterwards through `app_source` is too late to stop it). |
-| Ad-hoc start with no call to bind | `normal`, `-t 15000` | "Recording everything this machine plays" / no meeting call was found, so the meeting track holds the whole output mix | `munin stop` | — (§16.5: asked for by `[capture] adhoc_app_source`, not a fallback, but the same §12 point applies). |
+| Call detected | `normal`, `-t 30000` | "Meeting detected" / "<app> call, <time>. Click to record." | `munin start --from-detection` | Panel: *Not this one* (dismiss). *Never for this meeting* is deferred — it needs the calendar series id (M9). |
+| Streams gone 1 min (`warn_seconds`) | `normal`, `-t 60000` | "Meeting seems over" / "Recording stops in 1:00. Click to stop now." | `munin stop` | Panel and keybind: *Keep recording* (`munin start --resume` is not it — the session is still recording; the panel calls `munin event call-started` to cancel the grace period). |
+| Auto-stopped | `critical` on failure, else `normal` | "Recording stopped" / "*n* min saved. Click to resume." | `munin start --resume` | Panel: *Open session*. |
+| A capture track died mid-meeting | `critical` | "Recording problem" / "Your microphone (or The meeting audio) stopped recording. The rest continues. Click to stop." | `munin stop` | — (once per track per session; a dead microphone ends the session instead and notifies as *Auto-stopped*). |
+| The app stream could not be bound | `critical` | "Recording all desktop audio" / "Could not record only <app>. All sound from this computer is included. Click to stop." | `munin stop` | — (spec §12: a sink-monitor track holds people who were never in the meeting, and telling the user afterwards through `app_source` is too late to stop it). |
+| Ad-hoc start with no call to bind | `normal`, `-t 15000` | "No meeting found, recording desktop audio" / "All sound from this computer is included. Click to stop." | `munin stop` | — (§16.5: asked for by `[capture] adhoc_app_source`, not a fallback, but the same §12 point applies). |
 
 D14 holds: auto-stop **always** notifies. `-r <id>` is used to replace the
 previous Munin notification rather than stacking, with a stable id per session.
@@ -625,6 +625,7 @@ resume_window_seconds = 600        # D15
 app_id       = "teams-native"
 label        = "Microsoft Teams"
 client_name  = "Teams"
+binary       = "teams-for-linux"   # measured: the native client reports "Chromium" as its name
 
 [[detection.apps]]
 app_id       = "teams-pwa"

@@ -86,7 +86,7 @@ def detected(app_label: str, when: str, *, session_id: str | None = None) -> Not
     """Call detected. Primary action: ``munin start --from-detection``."""
     return Notification(
         title="Meeting detected",
-        body=f"{app_label} at {when}",
+        body=f"{app_label} call, {when}. Click to record.",
         action=("munin", "start", "--from-detection"),
         urgency="normal",
         timeout_ms=30000,
@@ -97,8 +97,8 @@ def detected(app_label: str, when: str, *, session_id: str | None = None) -> Not
 def ending_soon(seconds_left: int, *, session_id: str | None = None) -> Notification:
     """Streams gone for ``warn_seconds``. Primary action: ``munin stop``."""
     return Notification(
-        title="Meeting looks finished",
-        body=f"Stops by itself in {format_clock(seconds_left)}",
+        title="Meeting seems over",
+        body=f"Recording stops in {format_clock(seconds_left)}. Click to stop now.",
         action=("munin", "stop"),
         urgency="normal",
         timeout_ms=60000,
@@ -111,9 +111,9 @@ def auto_stopped(
 ) -> Notification:
     """Auto-stopped (D14). Primary action: ``munin start --resume``."""
     if failed:
-        body = f"{minutes} min captured, but finishing failed -- the audio is kept"
+        body = f"{minutes} min saved, but finishing failed. The audio is kept."
     else:
-        body = f"{minutes} min captured, queued for transcription"
+        body = f"{minutes} min saved. Click to resume."
     return Notification(
         title="Recording stopped",
         body=body,
@@ -133,9 +133,10 @@ def track_failed(
     :func:`auto_stopped` says so. Sent once per track per session, because the
     condition does not clear -- a dead process stays dead until the next segment.
     """
+    who = {"mic": "Your microphone", "app": "The meeting audio"}.get(kind, f"The {kind} track")
     return Notification(
-        title="A recording track stopped",
-        body=f"The {kind} track died ({detail}). The rest is still being captured.",
+        title="Recording problem",
+        body=f"{who} stopped recording. The rest continues. Click to stop.",
         action=("munin", "stop"),
         urgency="critical",
         timeout_ms=30000,
@@ -152,10 +153,10 @@ def capture_widened(app_label: str, *, session_id: str | None = None) -> Notific
     fact; the user has to be told while it is happening, so they can stop.
     """
     return Notification(
-        title="Recording the whole desktop",
+        title="Recording all desktop audio",
         body=(
-            f"{app_label}'s own audio stream could not be bound, so the meeting "
-            "track holds everything this machine plays."
+            f"Could not record only {app_label}. All sound from this computer "
+            "is included. Click to stop."
         ),
         action=("munin", "stop"),
         urgency="critical",
@@ -173,11 +174,8 @@ def recording_system_output(*, session_id: str | None = None) -> Notification:
     still stop.
     """
     return Notification(
-        title="Recording everything this machine plays",
-        body=(
-            "No meeting call was found to bind to, so the meeting track holds "
-            "the whole output mix. Stop if that is not what you want."
-        ),
+        title="No meeting found, recording desktop audio",
+        body="All sound from this computer is included. Click to stop.",
         action=("munin", "stop"),
         urgency="normal",
         timeout_ms=15000,
