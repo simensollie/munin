@@ -158,6 +158,11 @@ class RuntimeState:
     #: the queue, so a captured session is an end state to render quietly,
     #: not work in progress to spin for.
     transcription_backend: str = "none"
+    #: ``[detection] resume_window_seconds`` (D15), so the panel can say how
+    #: long *Resume* still means "the same meeting" and offer *New recording*
+    #: beside it -- otherwise a click meant as "new" inside the window glues
+    #: the audio onto the previous session.
+    resume_window_seconds: int = 600
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -176,6 +181,7 @@ class RuntimeState:
             "idle_was_inhibited": self.idle_was_inhibited,
             "detection_rules": list(self.detection_rules),
             "transcription_backend": self.transcription_backend,
+            "resume_window_seconds": self.resume_window_seconds,
             "updated_at": _iso(_now()),
             "daemon_pid": self.daemon_pid,
         }
@@ -294,6 +300,7 @@ class Daemon:
             daemon_pid=os.getpid(),
             detection_rules=_rule_rows(config),
             transcription_backend=config.transcribe.backend,
+            resume_window_seconds=config.detection.resume_window_seconds,
         )
         self.clock = clock or _now
         self.spool = spool if spool is not None else _default_spool(config)

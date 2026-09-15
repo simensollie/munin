@@ -96,6 +96,9 @@ function emptyState() {
         // Which backend the worker would use. "none" is the PoC: nothing will
         // ever drain the queue, so the bar must not promise that it will.
         transcription_backend: null,
+        // D15's window, so Resume can say how long it still means "the same
+        // meeting". null when the daemon predates the field.
+        resume_window_seconds: null,
         updated_at: null,
         daemon_pid: 0,
         // Not part of the daemon's contract: set by parseState so the widget
@@ -136,6 +139,9 @@ function parseState(text) {
     view.idle_was_inhibited = raw.idle_was_inhibited === true;
     view.detection_rules = parseRules(raw.detection_rules);
     view.transcription_backend = stringOrNull(raw.transcription_backend);
+    view.resume_window_seconds = raw.resume_window_seconds === null
+        || raw.resume_window_seconds === undefined
+        ? null : Math.max(0, numberOr(raw.resume_window_seconds, 0));
     view.updated_at = stringOrNull(raw.updated_at);
     view.daemon_pid = numberOr(raw.daemon_pid, 0);
     return view;
@@ -439,6 +445,47 @@ function secondaryAction(state) {
     if (String(state || "idle") === "ending")
         return { label: "Keep recording", argv: ["munin", "event", "call-started"] };
     return null;
+}
+
+// Seconds of D15's resume window still open after the last capture, or -1
+// when the question does not apply (not a finished session, no window
+// published, no `since`). `since` is the moment the daemon wrote the finished
+// state, which is when the window starts.
+function resumeSecondsLeft(view, nowMs) {
+    if (!view) return -1;
+    var state = effectiveState(view, nowMs);
+    if (state !== "captured" && state !== "done" && state !== "failed") return -1;
+    if (view.resume_window_seconds === null || view.resume_window_seconds === undefined) return -1;
+    var elapsed = elapsedSeconds(view.since, nowMs);
+    if (elapsed < 0) return -1;
+    return Math.max(0, view.resume_window_seconds - elapsed);
+}
+
+function formatLeft(seconds) {
+    seconds = Math.max(0, Math.floor(seconds));
+    if (seconds >= 60) return Math.ceil(seconds / 60) + " min left";
+    return seconds + " s left";
+}
+
+// The two panel buttons for a finished session, which is the state the panel
+// is most often opened in. Inside the window: Resume (labelled with what is
+// left of it) and New recording side by side, because `munin start --resume`
+// continues the previous meeting and a click meant as "new" must have its
+// own button. Past the window Resume would silently start a fresh session
+// anyway, so the button says what it does.
+function primaryActionFor(view, nowMs) {
+    var left = resumeSecondsLeft(view, nowMs);
+    if (left > 0) {
+        return { label: "Resume · " + formatLeft(left), argv: ["munin", "start", "--resume"] };
+    }
+    if (left === 0) return { label: "New recording", argv: ["munin", "start"] };
+    return primaryAction(effectiveState(view, nowMs));
+}
+
+function secondaryActionFor(view, nowMs) {
+    var left = resumeSecondsLeft(view, nowMs);
+    if (left > 0) return { label: "New recording", argv: ["munin", "start"] };
+    return secondaryAction(effectiveState(view, nowMs));
 }
 
 // Wrap an argv vector in a login shell without letting it be re-tokenized:

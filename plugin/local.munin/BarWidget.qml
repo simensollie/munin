@@ -112,7 +112,7 @@ Panel {
     }
 
     function runPrimary() {
-        root.run(Model.primaryAction(root.barState).argv);
+        root.run(Model.primaryActionFor(root.status, root.nowMs).argv);
         root.close();
     }
 
@@ -121,7 +121,7 @@ Panel {
     // 8), so the panel and the keybind are the only places *Keep recording*
     // can be offered -- and without it a Teams reconnect during the grace
     // period auto-stops the meeting with no way for the user to say otherwise.
-    readonly property var secondary: Model.secondaryAction(root.barState)
+    readonly property var secondary: Model.secondaryActionFor(root.status, root.nowMs)
 
     function runSecondary() {
         if (!root.secondary) return;
@@ -483,7 +483,7 @@ Panel {
                         spacing: Style.space(8)
 
                         Button {
-                            text: Model.primaryAction(root.barState).label
+                            text: Model.primaryActionFor(root.status, root.nowMs).label
                             iconText: root.counting ? Model.GLYPH : ""
                             bordered: true
                             foreground: root.counting ? root.urgent : root.foreground

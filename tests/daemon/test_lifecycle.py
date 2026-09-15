@@ -299,7 +299,7 @@ def test_ping_and_status_shapes(harness: Harness) -> None:
     status = harness.daemon.handle_status({})
     for key in ("schema_version", "state", "since", "started_at", "title", "session",
                 "session_id", "segment", "detected_app", "grace_deadline", "queue_depth",
-                "last_error", "idle_was_inhibited", "detection_rules", "transcription_backend", "updated_at",
+                "last_error", "idle_was_inhibited", "detection_rules", "transcription_backend", "resume_window_seconds", "updated_at",
                 "daemon_pid"):
         assert key in status
 

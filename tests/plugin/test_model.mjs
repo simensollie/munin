@@ -558,3 +558,52 @@ test("a state file without the field behaves as before", () => {
   assert.equal(M.deferred(view, T0), false);
   assert.equal(M.barLabel(view, T0), "1 queued");
 });
+
+
+// ------------------------------------------------- resume vs new recording
+
+test("inside the resume window the panel offers both Resume and New recording", () => {
+  const view = M.parseState(stateJson({ state: "captured", queue_depth: 1,
+    since: "2026-09-14T13:25:08+02:00", resume_window_seconds: 600,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  const at = T0 + 3 * 60 * 1000;           // three minutes after capture
+  assert.equal(M.resumeSecondsLeft(view, at), 420);
+  assert.deepEqual(M.primaryActionFor(view, at),
+    { label: "Resume · 7 min left", argv: ["munin", "start", "--resume"] });
+  assert.deepEqual(M.secondaryActionFor(view, at),
+    { label: "New recording", argv: ["munin", "start"] });
+});
+
+test("past the window there is one button and it says New recording", () => {
+  const view = M.parseState(stateJson({ state: "captured", queue_depth: 1,
+    since: "2026-09-14T13:25:08+02:00", resume_window_seconds: 600,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  const at = T0 + 11 * 60 * 1000;
+  assert.equal(M.resumeSecondsLeft(view, at), 0);
+  assert.deepEqual(M.primaryActionFor(view, at), { label: "New recording", argv: ["munin", "start"] });
+  assert.equal(M.secondaryActionFor(view, at), null);
+});
+
+test("under a minute the label counts seconds", () => {
+  const view = M.parseState(stateJson({ state: "failed", queue_depth: 0,
+    since: "2026-09-14T13:25:08+02:00", resume_window_seconds: 600,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(M.primaryActionFor(view, T0 + 570 * 1000).label, "Resume · 30 s left");
+});
+
+test("a daemon that publishes no window keeps the old buttons", () => {
+  const view = M.parseState(stateJson({ state: "captured", queue_depth: 1,
+    since: "2026-09-14T13:25:08+02:00", updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(M.resumeSecondsLeft(view, T0), -1);
+  assert.deepEqual(M.primaryActionFor(view, T0), M.primaryAction("captured"));
+  assert.equal(M.secondaryActionFor(view, T0), null);
+});
+
+test("the live states are untouched by the resume logic", () => {
+  const rec = M.parseState(stateJson({ state: "recording", resume_window_seconds: 600,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.deepEqual(M.primaryActionFor(rec, T0), M.primaryAction("recording"));
+  const ending = M.parseState(stateJson({ state: "ending", resume_window_seconds: 600,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.deepEqual(M.secondaryActionFor(ending, T0), M.secondaryAction("ending"));
+});

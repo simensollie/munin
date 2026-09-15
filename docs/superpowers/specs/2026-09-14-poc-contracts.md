@@ -537,6 +537,11 @@ count and no spinner: nothing will drain it, and the panel carries the count
 and the reason. (Added after the first real install, where the bar showed a
 permanent "1 queued" and the panel painted the pending session as a failure.)
 
+`resume_window_seconds` is `[detection] resume_window_seconds` (D15). The
+panel uses it with `since` to label *Resume* with the time left in the window
+and to offer *New recording* beside it; past the window the one button reads
+*New recording*, which is what `munin start --resume` would have done anyway.
+
 `detection_rules` is the resolved `[[detection.apps]]` table, flattened with
 empty fields dropped. The plugin is the default detection source and has no TOML
 parser, so this is how D13 ("another application is a row in `config.toml`, never
