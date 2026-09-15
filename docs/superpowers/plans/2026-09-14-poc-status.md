@@ -84,11 +84,31 @@ completed. Findings:
   Worth reporting upstream: an unattended `plugin enable` should not rewrite
   unrelated bar settings.
 
+### 2.2 Smoke rebuild (2026-09-15, afternoon)
+
+`./install.sh --enable` re-run over the existing install: every step idempotent
+(keybind block left unchanged, bar settings preserved). `munin doctor`: 0
+failed. `munin toggle` twice recorded 5.8 s with the tone on the app track
+(−21.1 dB) and the room on the mic (−55.3 dB); `munin-work --once` left it
+pending. Two findings:
+
+- **A plugin hot-reload keeps the old `Model.js`.** The shell logged the reload
+  and the new files were on disk, but the bar kept rendering with the previous
+  module until `omarchy-restart-shell`. The installer now restarts the shell
+  when the plugin it copies differs from the one installed (never on a first
+  install or an unchanged re-run). `munin.service` stayed active through the
+  restart, which is D20 observed rather than asserted. Never use
+  `omarchy-refresh-shell` for this: it resets `shell.json` to defaults and
+  drops the widget.
+- After the restart the bar shows the dim hourglass with no count for the
+  deferred queue (§2.1 follow-up), confirmed by screenshot.
+
 Not verified, and why:
 
-- **The bar widget's look**, the dropdown, and the notification buttons on
-  screen. The plugin loads without error; nobody has yet watched it through the
-  seven states or clicked *Record* on a notification.
+- **The dropdown's buttons and the notification buttons** as clicked by a
+  person, and the recording/ending/done/failed bar states on screen. The
+  idle-with-queue chip is confirmed by screenshot; the rest of the seven states
+  have only been exercised through the state file.
 - **A real Microsoft Teams call.** The three detection shapes come from spec
   §6.3, not a measurement. If one fails it is a row in `[[detection.apps]]`.
 - **Speech in the microphone track.** Every run was in a quiet room.

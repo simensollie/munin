@@ -343,3 +343,24 @@ def test_a_bar_that_was_already_transparent_is_left_alone(machine: FakeMachine) 
     machine.run()
     assert not machine.called("omarchy bar transparent")
     assert json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["transparent"] is True
+
+
+def test_a_changed_plugin_restarts_the_shell_and_an_unchanged_one_does_not(
+    machine: FakeMachine,
+) -> None:
+    """Measured: a hot-reload keeps the already-evaluated Model.js, so a new
+    plugin only shows up after omarchy-restart-shell. A first install and a
+    no-op re-run must not restart anything."""
+    machine.run()
+    assert not machine.called("omarchy-restart-shell")
+
+    machine.clear_log()
+    machine.run()
+    assert not machine.called("omarchy-restart-shell"), "identical files: nothing to reload"
+
+    installed = machine.home / ".config" / "omarchy" / "plugins" / "local.munin" / "Model.js"
+    installed.write_text(installed.read_text(encoding="utf-8") + "\n// stale\n", encoding="utf-8")
+    machine.clear_log()
+    machine.run()
+    assert machine.called("omarchy-restart-shell")
+    assert "// stale" not in installed.read_text(encoding="utf-8")

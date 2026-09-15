@@ -98,6 +98,11 @@ printf 'omarchy-shell %s\\n' "$*" >>"$SHIM_LOG"
 exit 0
 """
 
+RESTART_SHELL = """#!/usr/bin/env bash
+printf 'omarchy-restart-shell %s\\n' "$*" >>"$SHIM_LOG"
+exit 0
+"""
+
 HYPRCTL = """#!/usr/bin/env bash
 printf 'hyprctl %s\\n' "$*" >>"$SHIM_LOG"
 [[ ${1:-} == configerrors ]] && echo "no errors"
@@ -309,6 +314,7 @@ def machine(tmp_path: Path) -> FakeMachine:
     real_python = shutil.which("python3") or "/usr/bin/python3"
     _write_exe(shim / "omarchy", OMARCHY)
     _write_exe(shim / "omarchy-shell", OMARCHY_SHELL)
+    _write_exe(shim / "omarchy-restart-shell", RESTART_SHELL)
     _write_exe(shim / "hyprctl", HYPRCTL)
     _write_exe(shim / "systemctl", SYSTEMCTL)
     _write_exe(shim / "pw-dump", PW_DUMP)

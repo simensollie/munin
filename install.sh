@@ -248,10 +248,22 @@ step_venv() {
 # symlinks anywhere inside a plugin folder) and validated where it will run.
 # ---------------------------------------------------------------------------
 
+# Set by step 3 when an already-installed plugin is replaced by different
+# files. The shell hot-reloads a changed plugin folder, but that reload keeps
+# the JavaScript module (Model.js) it already evaluated -- measured: a new
+# Model.js only took effect after `omarchy-restart-shell`. So step 4 restarts
+# the shell when the plugin changed. The recording daemon is untouched by that
+# (D20; verified: munin.service stayed active through the restart).
+PLUGIN_CHANGED=0
+
 step_plugin_copy() {
   step 3 "Installing the shell plugin"
   local src="$REPO_DIR/plugin/$PLUGIN_ID"
   [[ -d $src ]] || fail 3 "plugin source is missing: $src"
+  if [[ -d $PLUGIN_DIR ]] && ! diff -rq "$src" "$PLUGIN_DIR" >/dev/null 2>&1; then
+    PLUGIN_CHANGED=1
+    info "the installed plugin differs from the repository copy; it will be replaced"
+  fi
   run mkdir -p "$PLUGIN_ROOT"
   run rm -rf "$PLUGIN_DIR"
   run cp -R "$src" "$PLUGIN_DIR" || fail 3 "could not copy the plugin"
@@ -349,6 +361,21 @@ step_plugin_enable() {
   fi
   info "enabled $PLUGIN_ID"
   (( DRY_RUN )) || restore_bar_settings "$before_transparent" "$before_position"
+  restart_shell_if_plugin_changed
+}
+
+restart_shell_if_plugin_changed() {
+  (( PLUGIN_CHANGED )) || return 0
+  if ! have omarchy-restart-shell; then
+    warn "the plugin changed but omarchy-restart-shell is missing; restart the shell yourself"
+    return 0
+  fi
+  if have omarchy-shell && ! omarchy-shell -q shell ping >/dev/null 2>&1; then
+    info "the plugin changed; the shell is not running, so the next start loads it"
+    return 0
+  fi
+  info "the plugin changed; a hot-reload keeps the old Model.js, so the shell is restarted"
+  run omarchy-restart-shell || warn "omarchy-restart-shell failed; restart the shell yourself"
 }
 
 # ---------------------------------------------------------------------------
