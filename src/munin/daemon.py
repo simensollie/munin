@@ -935,15 +935,18 @@ class Daemon:
             label="microphone",
         )
         app: CaptureTarget | None = None
-        # Both halves matter: the handle names a node, and ``_detected`` is the
-        # daemon's belief that the call behind it is still live. A handle
-        # without that belief is debris from a finished call, and binding it
-        # would either miss the meeting or widen capture to the desktop mix.
-        if self._playback_handle and self._detected is not None:
-            detected = self._detected
+        # ``_detected`` is the daemon's belief that a call is live; a handle or
+        # a pid without it is debris from a finished call, and binding it would
+        # either miss the meeting or widen capture to the desktop mix. With a
+        # live detection, a pid alone is enough: the capturer gives that
+        # process its own sink (process-sink) and only needs a stream handle
+        # for the older one-node fallback. Measured 2026-09-15: an event with
+        # --pid but no --handle otherwise fell through to the desktop mix.
+        detected = self._detected
+        if detected is not None and (self._playback_handle or detected.get("pid")):
             app = CaptureTarget(
                 kind="app",
-                handle=self._playback_handle,
+                handle=self._playback_handle or "",
                 label=str(detected.get("label", "meeting audio")),
                 pid=detected.get("pid"),
                 app_id=detected.get("app_id"),

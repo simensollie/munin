@@ -630,3 +630,18 @@ def test_the_detected_call_hands_the_capturer_its_pid(harness: Harness) -> None:
     daemon.handle_start({"from_detection": True})
     assert daemon.capturer.app.pid == 4242  # type: ignore[union-attr]
     assert daemon.capturer.app.handle == "9911"  # type: ignore[union-attr]
+
+
+def test_a_detected_pid_without_a_stream_handle_still_gets_its_own_target(
+    harness: Harness,
+) -> None:
+    """Measured: `munin event call-started --pid N` with no --handle fell through
+    to the desktop mix. The process is what process-sink needs; the handle is
+    only for the one-node fallback."""
+    daemon = harness.daemon
+    daemon.handle_event({"event": "call-started", "pid": 4242, "app": "Beacon 365"})
+    daemon.handle_start({"from_detection": True})
+    target = daemon.capturer.app  # type: ignore[union-attr]
+    assert target is not None and target.pid == 4242
+    assert target.handle == ""
+    assert "No meeting found, recording desktop audio" not in harness.titles()
