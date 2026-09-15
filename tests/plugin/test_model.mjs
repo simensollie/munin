@@ -514,3 +514,47 @@ test("Model.js exports every function the QML calls", () => {
   assert.equal(M.STATES.length, 8);
   assert.equal(M.DEFAULT_APP_RULES.length, 3);
 });
+
+
+// ------------------------------------------------ deferred transcription
+
+test("a pending session is waiting, not failed", () => {
+  const list = M.parseSessions('{"sessions": [{"id": "a", "state": "pending", "pending_reason": "no transcription backend configured"}]}');
+  assert.equal(list[0].state, "pending");
+  assert.equal(M.sessionGlyph("pending"), M.GLYPH_WAITING);
+  assert.equal(M.sessionGlyph("captured"), M.GLYPH_WAITING);
+  assert.equal(M.sessionGlyph("failed"), M.GLYPH_FAILED);
+  // A state the plugin has never heard of is still flagged, never hidden.
+  const odd = M.parseSessions('{"sessions": [{"id": "b", "state": "exploded"}]}');
+  assert.equal(odd[0].state, "unknown");
+  assert.equal(M.sessionGlyph("unknown"), M.GLYPH_FAILED);
+});
+
+test("with no backend the bar shows a quiet hourglass and no count", () => {
+  const view = M.parseState(stateJson({ state: "captured", queue_depth: 3,
+    transcription_backend: "none", updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(M.deferred(view, T0), true);
+  assert.equal(M.barGlyphFor(view, T0), M.GLYPH_WAITING);
+  assert.equal(M.barToneFor(view, T0), "dim");
+  assert.equal(M.barLabel(view, T0), "");
+  assert.equal(M.barSpins(M.effectiveState(view, T0)), false);
+  assert.match(M.tooltipText(view, T0), /no transcription backend/);
+  assert.match(M.tooltipText(view, T0), /3 captured/);
+});
+
+test("with a real backend the queue still reads as work", () => {
+  const view = M.parseState(stateJson({ state: "transcribing", queue_depth: 2,
+    transcription_backend: "local", updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(M.deferred(view, T0), false);
+  assert.equal(M.barGlyphFor(view, T0), M.GLYPH_WORKING);
+  assert.equal(M.barToneFor(view, T0), "foreground");
+  assert.equal(M.barLabel(view, T0), "2 queued");
+});
+
+test("a state file without the field behaves as before", () => {
+  const view = M.parseState(stateJson({ state: "captured", queue_depth: 1,
+    updated_at: "2026-09-14T13:25:08+02:00" }));
+  assert.equal(view.transcription_backend, null);
+  assert.equal(M.deferred(view, T0), false);
+  assert.equal(M.barLabel(view, T0), "1 queued");
+});

@@ -65,7 +65,7 @@ Panel {
     readonly property string barState: Model.effectiveState(status, nowMs)
     readonly property bool counting: barState === "recording" || barState === "ending"
     readonly property string barLabel: Model.barLabel(status, nowMs)
-    readonly property string barGlyphText: Model.barGlyph(barState)
+    readonly property string barGlyphText: Model.barGlyphFor(status, nowMs)
 
     // `Panel` is not `BarWidget`, so the bar geometry it lifts off the host
     // has to be lifted here instead.
@@ -86,7 +86,7 @@ Panel {
     }
 
     readonly property color barTint:
-        toneColor(Model.barTone(barState), root.barForegroundColor)
+        toneColor(Model.barToneFor(status, nowMs), root.barForegroundColor)
 
     // --- the session list, refreshed when the panel opens ---------------
 

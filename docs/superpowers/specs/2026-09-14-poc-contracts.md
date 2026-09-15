@@ -531,6 +531,12 @@ session's `session.json`. `started_at` lets the plugin compute elapsed time
 itself, so **no timer ever writes this file**. `grace_deadline` is set only in
 `ending`. `queue_depth` is the count of sessions in `inbox/`.
 
+`transcription_backend` is `[transcribe] backend` as the daemon loaded it.
+With `"none"` the plugin renders a captured queue as a dim hourglass with no
+count and no spinner: nothing will drain it, and the panel carries the count
+and the reason. (Added after the first real install, where the bar showed a
+permanent "1 queued" and the panel painted the pending session as a failure.)
+
 `detection_rules` is the resolved `[[detection.apps]]` table, flattened with
 empty fields dropped. The plugin is the default detection source and has no TOML
 parser, so this is how D13 ("another application is a row in `config.toml`, never

@@ -154,6 +154,10 @@ class RuntimeState:
     #: the plugin is the default detection source -- it cannot read the config
     #: itself, so the daemon, which owns it, publishes it here.
     detection_rules: list[dict] = field(default_factory=list)
+    #: ``[transcribe] backend``. "none" tells the bar that nothing will drain
+    #: the queue, so a captured session is an end state to render quietly,
+    #: not work in progress to spin for.
+    transcription_backend: str = "none"
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -171,6 +175,7 @@ class RuntimeState:
             "last_error": self.last_error,
             "idle_was_inhibited": self.idle_was_inhibited,
             "detection_rules": list(self.detection_rules),
+            "transcription_backend": self.transcription_backend,
             "updated_at": _iso(_now()),
             "daemon_pid": self.daemon_pid,
         }
@@ -286,7 +291,9 @@ class Daemon:
     ) -> None:
         self.config = config
         self.state = RuntimeState(
-            daemon_pid=os.getpid(), detection_rules=_rule_rows(config)
+            daemon_pid=os.getpid(),
+            detection_rules=_rule_rows(config),
+            transcription_backend=config.transcribe.backend,
         )
         self.clock = clock or _now
         self.spool = spool if spool is not None else _default_spool(config)

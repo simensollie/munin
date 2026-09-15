@@ -28,6 +28,12 @@ var SCHEMA_VERSION = 1;
 var STATES = ["idle", "detected", "recording", "ending",
               "captured", "transcribing", "done", "failed"];
 
+// Session states are the spool's, not the bar's: `pending` is a session that
+// is captured, safe and waiting for a backend. It is not a bar state (the
+// daemon publishes it as `captured`), and it is emphatically not `failed` --
+// mapping it there painted a red alert on every recording in the PoC.
+var SESSION_STATES = STATES.concat(["pending"]);
+
 // Munin's identity glyph: U+F0EC2, the one bar/indicators/ScreenRecording.qml
 // uses. It is the panel hero icon rather than the bar mark, because the bar
 // mark for an active recording is a red dot (sketch 01), which reads at a
@@ -36,6 +42,7 @@ var GLYPH = "󰻂";
 
 var GLYPH_DETECTED = "󰍬";     // microphone, dim: a call is live, we are not recording
 var GLYPH_WORKING = "󰑓";      // refresh, spun by the widget while transcribing
+var GLYPH_WAITING = "󰔟";      // hourglass: captured and waiting, nothing running
 var GLYPH_DONE = "󰄬";         // check
 var GLYPH_FAILED = "󰀪";       // alert
 var GLYPH_FOLDER = "󰉋";       // folder, for the "open recordings" row
@@ -86,6 +93,9 @@ function emptyState() {
         last_error: null,
         idle_was_inhibited: false,
         detection_rules: [],
+        // Which backend the worker would use. "none" is the PoC: nothing will
+        // ever drain the queue, so the bar must not promise that it will.
+        transcription_backend: null,
         updated_at: null,
         daemon_pid: 0,
         // Not part of the daemon's contract: set by parseState so the widget
@@ -125,6 +135,7 @@ function parseState(text) {
     view.last_error = stringOrNull(raw.last_error);
     view.idle_was_inhibited = raw.idle_was_inhibited === true;
     view.detection_rules = parseRules(raw.detection_rules);
+    view.transcription_backend = stringOrNull(raw.transcription_backend);
     view.updated_at = stringOrNull(raw.updated_at);
     view.daemon_pid = numberOr(raw.daemon_pid, 0);
     return view;
@@ -275,6 +286,27 @@ function visible(state) {
     return String(state || "idle") !== "idle";
 }
 
+// A queue nothing will drain. With `transcription_backend: "none"` a captured
+// session is the designed end state, not work in progress, so the bar shows a
+// quiet hourglass and no count: the count lives in the panel, where the reason
+// is printed next to it. A spinner or a permanent "1 queued" would claim that
+// something is happening.
+function deferred(view, nowMs) {
+    if (!view || view.transcription_backend !== "none") return false;
+    var s = effectiveState(view, nowMs);
+    return s === "captured" || s === "transcribing";
+}
+
+function barGlyphFor(view, nowMs) {
+    if (deferred(view, nowMs)) return GLYPH_WAITING;
+    return barGlyph(effectiveState(view, nowMs));
+}
+
+function barToneFor(view, nowMs) {
+    if (deferred(view, nowMs)) return "dim";
+    return barTone(effectiveState(view, nowMs));
+}
+
 function barGlyph(state) {
     switch (String(state || "idle")) {
     case "detected": return GLYPH_DETECTED;
@@ -321,6 +353,7 @@ function barSpins(state) {
 
 function barLabel(view, nowMs) {
     if (!view) return "";
+    if (deferred(view, nowMs)) return "";
     var state = effectiveState(view, nowMs);
     var secs;
     switch (state) {
@@ -363,6 +396,10 @@ function tooltipText(view, nowMs) {
         return "Streams gone from " + title + ". Stops by itself shortly.";
     case "captured":
     case "transcribing":
+        if (deferred(view, nowMs)) {
+            return view.queue_depth + " captured and safe on disk, waiting: "
+                + "no transcription backend is configured yet.";
+        }
         return "Captured and safe on disk. " + view.queue_depth + " in the queue.";
     case "done":
         return "Transcript ready: " + title;
@@ -435,8 +472,8 @@ function parseSessions(text) {
         if (!s || typeof s !== "object") continue;
         out.push({
             id: String(s.id || ""),
-            state: STATES.indexOf(String(s.state || "")) !== -1
-                ? String(s.state) : "failed",
+            state: SESSION_STATES.indexOf(String(s.state || "")) !== -1
+                ? String(s.state) : "unknown",
             title: s.title ? String(s.title) : String(s.id || "Untitled"),
             started_at: stringOrNull(s.started_at),
             duration_seconds: numberOr(s.duration_seconds, 0),
@@ -452,8 +489,10 @@ function sessionGlyph(state) {
     case "recording":
     case "ending": return GLYPH;
     case "done": return GLYPH_DONE;
-    case "failed": return GLYPH_FAILED;
-    default: return GLYPH_WORKING;
+    case "failed":
+    case "unknown": return GLYPH_FAILED;
+    case "transcribing": return GLYPH_WORKING;
+    default: return GLYPH_WAITING;    // captured, pending: safe, waiting
     }
 }
 
