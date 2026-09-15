@@ -322,6 +322,9 @@ def machine(tmp_path: Path) -> FakeMachine:
     runtime.mkdir()
 
     env = dict(os.environ)
+    # The CLI's own session-variable derivation may have marked this process
+    # (tests call main()); a synthetic machine inherited nothing.
+    env.pop("MUNIN_ENV_DERIVED", None)
     env.update(
         {
             "HOME": str(home),

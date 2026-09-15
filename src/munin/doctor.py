@@ -206,6 +206,13 @@ def check_runtime_dir(env: DoctorEnv) -> CheckResult:
     path = Path(value)
     if not path.is_dir():
         return CheckResult("XDG_RUNTIME_DIR", "fail", f"{path} is not a directory")
+    derived = (env.env.get("MUNIN_ENV_DERIVED") or "").split(",")
+    if "XDG_RUNTIME_DIR" in derived:
+        return CheckResult(
+            "XDG_RUNTIME_DIR",
+            "warn",
+            f"{path} (derived: this shell does not export it; the systemd unit sets its own)",
+        )
     return CheckResult("XDG_RUNTIME_DIR", "ok", str(path))
 
 

@@ -26,6 +26,7 @@ import json
 import sys
 from typing import Any
 
+from munin.desktop import prepare_session_environment
 from munin.ipc import DaemonUnreachable, IpcError
 
 __all__ = [
@@ -323,6 +324,10 @@ _DISPATCH = {
 
 
 def main(argv: list[str] | None = None) -> int:
+    # A terminal that did not inherit the graphical session has no runtime dir
+    # and no compositor signature; derive them, or every check below "finds
+    # nothing" for a reason that has nothing to do with the install.
+    prepare_session_environment()
     parser = build_parser()
     args = parser.parse_args(argv)
     if not args.command:

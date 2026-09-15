@@ -28,6 +28,14 @@
 
 set -euo pipefail
 
+# A terminal that did not inherit the graphical session has no XDG_RUNTIME_DIR
+# (seen on this machine). Without it pw-dump finds nothing, and hyprctl cannot
+# derive its instance signature, so the reload in step 5 fails for a reason
+# unrelated to the install. /run/user/<uid> is the standard answer.
+if [[ -z ${XDG_RUNTIME_DIR:-} && -d "/run/user/$(id -u)" ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
 SCRIPT_PATH="$(readlink -f "${BASH_SOURCE[0]}")"
 REPO_DIR="$(dirname "$SCRIPT_PATH")"
 

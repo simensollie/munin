@@ -229,3 +229,11 @@ def test_a_detector_that_cannot_reach_pipewire_is_a_failure(
     checks = _run(installed)
     assert checks["detection"].status == "fail"
     assert "could not read PipeWire" in checks["detection"].detail
+
+
+def test_a_derived_runtime_dir_is_a_warning_not_a_failure(machine: FakeMachine) -> None:
+    """The CLI derives it for a bare terminal; doctor must say so, not fail."""
+    machine.env["MUNIN_ENV_DERIVED"] = "XDG_RUNTIME_DIR,HYPRLAND_INSTANCE_SIGNATURE"
+    checks = _run(machine)
+    assert checks["XDG_RUNTIME_DIR"].status == "warn"
+    assert "derived" in checks["XDG_RUNTIME_DIR"].detail

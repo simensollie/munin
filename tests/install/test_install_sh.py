@@ -309,3 +309,10 @@ def test_uninstall_removes_the_keybind_backup_and_reloads(machine: FakeMachine) 
     assert not legacy.exists(), "an uninstall must not leave litter in someone's repo"
     # The key still points at a binary this same run deletes, until Hyprland is told.
     assert machine.called("hyprctl reload")
+
+
+def test_install_derives_the_runtime_dir_for_a_bare_terminal(machine: FakeMachine) -> None:
+    """Seen live: the user's terminal had no XDG_RUNTIME_DIR and step 5's reload failed."""
+    del machine.env["XDG_RUNTIME_DIR"]
+    machine.run()
+    assert machine.called("hyprctl reload")

@@ -1,6 +1,6 @@
 # Munin PoC: status
 
-**Status:** Proof of concept built on branch `poc`; not yet installed on a machine
+**Status:** Proof of concept built on branch `poc`, installed and running on the primary Omarchy machine (2026-09-15)
 **Date:** 2026-09-15
 **Owner:** Simen Sollie
 **Implements:** [`../specs/2026-09-14-poc-contracts.md`](../specs/2026-09-14-poc-contracts.md) (PoC contracts) against [`../specs/2026-09-14-meeting-recorder-design.md`](../specs/2026-09-14-meeting-recorder-design.md) (the spec)
@@ -23,11 +23,11 @@ drives are subprocesses.
 | `munin-rec` daemon: state machine, timers, grace period, resume, notifications, idle inhibit, socket + state file | `src/munin/daemon.py`, `ipc.py`, `notify.py`, `desktop/` | Built, tested, run live |
 | `munin` CLI: `start stop toggle status list event doctor setup daemon worker` | `src/munin/cli.py` | Built, tested, run live |
 | `munin-work` worker, backend protocol, transcript renderer | `src/munin/worker.py`, `backends/`, `pipeline/render.py` | Built, tested; only the `none` backend exists |
-| Omarchy plugin: PipeWire watch, seven bar states, dropdown panel | `plugin/local.munin/` | Built, validates, QML compiles; **never loaded in the running shell** |
-| `install.sh`, `munin doctor`, `munin setup` | repo root, `src/munin/doctor.py`, `setup.py` | Built, tested against a shimmed machine and `--dry-run`; **never run for real** |
-| systemd user unit | `systemd/munin.service` | Written; never started by systemd |
+| Omarchy plugin: PipeWire watch, seven bar states, dropdown panel | `plugin/local.munin/` | Built, validates; loaded by the running shell with no QML errors (visual check of the seven states still pending) |
+| `install.sh`, `munin doctor`, `munin setup` | repo root, `src/munin/doctor.py`, `setup.py` | Built, tested; `install.sh --enable` run for real, `doctor` reports 0 failed; `setup` not yet run |
+| systemd user unit | `systemd/munin.service` | Enabled and active under `graphical-session.target` |
 
-Tests: `408 passed, 1 skipped`. The suite is deterministic and offline.
+Tests: `415 passed, 1 skipped`. The suite is deterministic and offline.
 
 ## 2. Verified live on this machine (2026-09-15)
 
@@ -50,13 +50,36 @@ was written.
 | `munin toggle` twice | yes |
 | `SIGTERM` to the daemon mid-recording → session finalised as `captured`, "Recording stopped" notification, daemon restarts clean | yes |
 
+### 2.1 The real install (2026-09-15)
+
+`./install.sh --enable` was run by the owner from a terminal. All seven steps
+completed. Findings:
+
+- The terminal had **no `XDG_RUNTIME_DIR` and no `HYPRLAND_INSTANCE_SIGNATURE`**,
+  so step 5's `hyprctl reload` failed and the first `munin doctor` showed five
+  fails that were all that one missing variable. Fixed the same day: the CLI,
+  `doctor` and `install.sh` now derive both (`/run/user/<uid>`, and the single
+  instance under `$XDG_RUNTIME_DIR/hypr`) and `doctor` reports a derived value
+  as a warning rather than a failure. A manual `hyprctl reload` then applied the
+  keybind; `hyprctl binds` lists SUPER + SHIFT + R as "Record meeting" (Lua
+  binds show a `__lua` dispatcher, not the command text).
+- The shell hot-reloaded `local.munin` (one plugin folder with kinds `service`
+  and `bar-widget`) and logged no QML error for it. Contracts §15.2 is answered:
+  a combined folder loads. `doctor`: `local.munin in bar.layout.right[0]`.
+- `munin doctor` from a bare shell after the fix: **23 checks, 0 failed, 2
+  warnings** (derived runtime dir; transcription deferred).
+- Through the installed unit, from a bare shell: `munin start` → 6.8 s
+  recording → `stop`; app track −21.1 dB RMS (tone), mic −56.0 dB; `munin-work
+  --once` leaves it `pending` with the deferred-transcription reason. Session:
+  `~/munin/recordings/2026/09/2026-09-15T1053-installed-daemon-test/`.
+- `hyprctl configerrors` is now empty; the two `hl.focus` errors seen before the
+  install came from the dotfiles bindings and are gone after the reload.
+
 Not verified, and why:
 
-- **Install on the real machine.** `install.sh --enable` was not run in this
-  session (the automated run was not permitted to change user configuration), so
-  the plugin has never loaded in the running Omarchy shell, the bar placement,
-  the keybind reload and the systemd start are unproven. Each is one command;
-  see §4.
+- **The bar widget's look**, the dropdown, and the notification buttons on
+  screen. The plugin loads without error; nobody has yet watched it through the
+  seven states or clicked *Record* on a notification.
 - **A real Microsoft Teams call.** The three detection shapes come from spec
   §6.3, not a measurement. If one fails it is a row in `[[detection.apps]]`.
 - **Speech in the microphone track.** Every run was in a quiet room.
@@ -99,10 +122,10 @@ the dotfiles repo (backup in `$XDG_STATE_HOME/munin/`), `~/.config/systemd/user/
 and `~/munin/` with a default `config.toml`. It never uses `sudo`; missing
 packages are printed as an `omarchy pkg add` line.
 
-After the first real install, the things to look at once: `journalctl --user
--t omarchy-shell` for QML errors mentioning `local.munin`; `hyprctl
-configerrors` (this machine already reports two unrelated `hl.focus` errors
-from the dotfiles bindings); and `munin doctor`.
+Things to look at once after an install: `journalctl --user -t omarchy-shell`
+for QML errors mentioning `local.munin`, `hyprctl configerrors`, and `munin
+doctor`. A terminal that does not export `XDG_RUNTIME_DIR` is handled: the CLI
+derives it and `doctor` says so as a warning.
 
 ## 5. Plugging in transcription
 
