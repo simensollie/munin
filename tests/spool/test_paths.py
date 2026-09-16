@@ -27,7 +27,7 @@ from munin import paths
         ("Rådata", "raadata"),
         ("Årsmøte i NORVA", "aarsmoete-i-norva"),
         ("Smørebrød og øl", "smoerebroed-og-oel"),
-        # A calendar subject with the two characters pensieve also sanitises.
+        # A calendar subject carrying the two characters a path cannot hold.
         ("Beacon 365: rollout / phase 2", "beacon-365-rollout-phase-2"),
         # Accents that NFKD can strip on its own.
         ("Café résumé", "cafe-resume"),

@@ -78,7 +78,7 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
     assert data["transcribe"]["backend"] == "none"
     assert data["idle"]["method"] == "omarchy-stay-awake"
     assert data["notifications"]["glyph"] == "\U000f0ec2"
-    assert data["pensieve"]["raw_dir"] == "~/pensieve/raw"
+    assert "pensieve" not in data
 
 
 def test_default_config_matches_the_dataclass_defaults(tmp_path: Path) -> None:

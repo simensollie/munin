@@ -304,11 +304,7 @@ class Session:
             "checksums": dict(self.checksums),
             "pending_reason": self.pending_reason,
             "error": self.error,
-            "transcript": dict(self.transcript) or {
-                "txt": None,
-                "json": None,
-                "pensieve_copy": None,
-            },
+            "transcript": dict(self.transcript) or {"txt": None, "json": None},
             "history": [dict(entry) for entry in self.history],
         }
         for key, value in self.extra.items():
@@ -588,7 +584,7 @@ class Spool:
             munin_version=munin.__version__,
             created_at=created,
             app=app,
-            transcript={"txt": None, "json": None, "pensieve_copy": None},
+            transcript={"txt": None, "json": None},
             history=[
                 {
                     "at": to_iso(created),

@@ -5,7 +5,7 @@
 **Revised:** 2026-09-14 — Teams-first scope, voice register, transcription
 backends, install flow. Open questions 4, 5 and 6 answered on the machine.
 **Owner:** Simen Sollie
-**Store:** `~/munin/` · also feeds `pensieve` (`~/pensieve/raw/`)
+**Store:** `~/munin/` (the session directory is authoritative, D24)
 **Sketches:** [`../../design/munin-plugin-sketches.html`](../../design/munin-plugin-sketches.html)
 
 > Public copy. Customer names, colleague names and internal project references
@@ -18,7 +18,8 @@ backends, install flow. Open questions 4, 5 and 6 answered on the machine.
 
 Meetings are currently recorded with Plaud on a MacBook and transcribed by Plaud's
 cloud. Transcripts land in `pensieve/raw/` via the `plaud` CLI and are distilled
-into the wiki by hand (with Claude).
+into the wiki by hand (with Claude). That is the arrangement being replaced;
+Munin writes its transcripts under `~/munin/` and nowhere else (D24).
 
 Two things break this:
 
@@ -86,6 +87,7 @@ second customer name appears zero times in 756,000 words.
 | D21 | Munin implements its own capture; no dependency on `voxtype` | `voxtype meeting` covers part of the Linux capture layer, but is Linux-only. Building on it would mean writing the same layer twice more for macOS and Windows, after the pipeline had shaped itself around another tool's data model (§16) |
 | D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
 | D23 | The `local` backend never imports the model stack; it runs it in a separate interpreter as a subprocess | Munin is stdlib-only and installs against the system Python, which on the reference desktop is 3.14; the pinned pyannote/faster-whisper/torch set needs 3.12. A process boundary keeps the two lifecycles independent, matches how every other external tool is invoked, and costs only interpreter startup, since D22 already reloads the model per job (§8.1) |
+| D24 | The session directory is the only place a transcript is written; no copy goes to `pensieve` | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
 
 ## 5. Architecture
 
@@ -104,7 +106,7 @@ second customer name appears zero times in 756,000 words.
   + bar glyph    │                               ▼                    │
        │         │                    ~/munin/recordings/…            │
        └─ user ──┘                               │                    ▼
-          says yes                               └──▶ pensieve/raw/<title>-transcript.txt
+          says yes                               └──▶ …/<session>/transcript.txt
                                     ▲
                         M365: title, attendees, agenda — enrichment only,
                         never a trigger.  Voice register: names, locally.
@@ -426,9 +428,11 @@ opening anything, and `grep -r` searches every transcript with no index to
 maintain. `session.json` is the only file the worker writes state into, so a
 half-finished session is always identifiable after a crash.
 
-A copy of `transcript.txt` is also written to `pensieve/raw/<sanitised calendar
-title>-transcript.txt`, matching the existing convention (`:` and `/` replaced
-with `_`), so `pensieve` ingest is unchanged.
+**The session directory is the only place a transcript is written (D24).**
+There is no second copy. An earlier draft mirrored every transcript into
+`~/pensieve/raw/`; that is removed, because `pensieve` is a personal vault and
+these transcripts are company records (§12). Anything that wants a flat list
+reads the tree, which `grep -r` already searches with no index to maintain.
 
 ```
 [00:00:08 - 00:00:17] Ola Nordmann: ...
@@ -712,8 +716,8 @@ munin list --not-uploaded
 munin mark-uploaded <session>
 ```
 
-Exported filenames match the transcript naming convention exactly, so a file in
-the upload folder pairs unambiguously with its transcript in `pensieve/raw/`.
+Exported filenames carry the session directory name, so a file in the upload
+folder pairs unambiguously with the session that produced it.
 Upload state lives in session metadata, so the outstanding set is always
 queryable. The upload itself is a manual drag into Plaud's web importer; munin
 does not automate it (Appendix A).
@@ -761,9 +765,12 @@ Flagging explicitly rather than burying it:
   section in that proposal, not a footnote.
 - **ISO 27001.** A transcript store accumulating customer commercial detail is a
   new asset with its own access control and retention requirements.
-- **Personal vault, work content.** `pensieve` is personal; transcripts of
-  customer meetings are arguably company records. Worth a deliberate decision on
-  where the authoritative copy lives.
+- **Personal vault, work content.** Settled by D24. `pensieve` is personal and
+  transcripts of customer meetings are company records, so Munin no longer
+  writes into it. The authoritative copy is the session directory under
+  `~/munin/`, which is the store that ISO 27001 access control and retention
+  apply to. One store, one retention policy, one place to answer a deletion
+  request from.
 
 
 ## 13. Testing
@@ -779,7 +786,7 @@ Flagging explicitly rather than burying it:
 - **Attribution**: assert self-attribution is exact on two-track fixtures;
   measure DER against hand-labelled references.
 - **Output**: assert monotonic timestamps, format conformance, and that the
-  filename matches `pensieve`'s convention.
+  transcript is written into the session directory and nowhere else.
 - **Backends**: the same fixture through `local`, `ssh` and `api` must produce
   identical text.
 - **Detection**: native app, PWA and browser tab each trigger; a browser playing
@@ -811,11 +818,13 @@ Answered since the first draft, by reading the machine (Appendix D):
   (`max_duration_secs`). Two concurrent readers on the same source were verified
   working, each negotiating its own format (44.1 kHz stereo and 16 kHz mono off
   one 16 kHz mono device), both receiving audio, no errors. See Appendix D.
+- ~~1. Where does the authoritative transcript live once work meetings are
+  involved?~~ The session directory under `~/munin/`, and nowhere else (D24).
+  The `pensieve` copy is removed. Retention design now has a single store to
+  apply to, which is what made this block M12.
 
 Still open:
 
-1. Where does the authoritative transcript live once work meetings are involved
-   (§10, §12)? Affects retention design.
 2. Can the home desktop reach the shared cluster, or is that office-network
    only? Determines whether the `api` backend is usable from home.
 3. Cluster node specs are still unknown, pending a hardware scoping session.

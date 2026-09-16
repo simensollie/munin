@@ -26,7 +26,7 @@ from munin.backends import get_backend
 from munin.backends.base import BackendUnavailable
 from munin.config import Config, load as load_config
 from munin.pipeline import run as run_pipeline
-from munin.pipeline.render import adjust_segments, pensieve_filename, render_transcript
+from munin.pipeline.render import adjust_segments, render_transcript
 from munin.spool import Segment, Session, Spool, StateError
 
 __all__ = ["Worker", "main"]
@@ -119,8 +119,8 @@ class Worker:
             session.transition("pending", by="munin-work", pending_reason=exc.reason)
         except Exception as exc:
             # Covers both a failing backend and a failure while writing the
-            # transcript out (disk full, unwritable pensieve dir, ...): either
-            # way the session is unrecoverable without intervention, and its
+            # transcript out (disk full, unwritable session directory, ...):
+            # either way the session is unrecoverable without intervention, and its
             # audio is retained rather than deleted (spec 11).
             session.transition(
                 "failed",
@@ -129,8 +129,13 @@ class Worker:
             )
 
     def _write_transcript(self, session: Session, transcript) -> None:
-        """``transcribing`` -> ``done``: render, write the sidecar, copy to
-        pensieve, then drop the inbox symlink."""
+        """``transcribing`` -> ``done``: render, write the sidecar, then drop
+        the inbox symlink.
+
+        The transcript is written once, into the session directory. There is no
+        second copy anywhere: the session directory is the authoritative
+        location (D24, spec 7.5).
+        """
         gaps = _compute_gaps(session.segments)
         adjusted, adjustments = adjust_segments(transcript.segments)
         text = render_transcript(transcript, gaps=gaps)
@@ -156,20 +161,12 @@ class Worker:
             json.dumps(payload, indent=2, ensure_ascii=False) + "\n", encoding="utf-8"
         )
 
-        pensieve_path: Path | None = None
-        if self.config.pensieve_raw_dir is not None:
-            pensieve_dir = Path(self.config.pensieve_raw_dir).expanduser()
-            pensieve_dir.mkdir(parents=True, exist_ok=True)
-            pensieve_path = pensieve_dir / pensieve_filename(session.title)
-            pensieve_path.write_text(text, encoding="utf-8")
-
         session.transition(
             "done",
             by="munin-work",
             transcript={
                 "txt": str(txt_path),
                 "json": str(json_path),
-                "pensieve_copy": str(pensieve_path) if pensieve_path else None,
             },
         )
         self.spool.unlink_inbox(session)

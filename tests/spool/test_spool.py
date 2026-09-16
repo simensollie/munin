@@ -74,7 +74,7 @@ def test_create_writes_a_conformant_session(spool: Spool, munin_home: Path) -> N
     assert data["checksums"] == {}
     assert data["pending_reason"] is None
     assert data["error"] is None
-    assert data["transcript"] == {"txt": None, "json": None, "pensieve_copy": None}
+    assert data["transcript"] == {"txt": None, "json": None}
     assert data["history"] == [
         {"at": data["created_at"], "from": None, "to": "recording", "by": REC}
     ]

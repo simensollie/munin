@@ -90,7 +90,7 @@ class FakeSession:
     checksums: dict[str, str] = field(default_factory=dict)
     pending_reason: str | None = None
     error: dict | None = None
-    transcript: dict = field(default_factory=lambda: {"txt": None, "json": None, "pensieve_copy": None})
+    transcript: dict = field(default_factory=lambda: {"txt": None, "json": None})
     history: list[dict] = field(default_factory=list)
     clock: Callable[[], datetime] | None = None
 

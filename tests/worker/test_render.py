@@ -11,7 +11,6 @@ from munin.pipeline.render import (
     adjust_segments,
     format_timestamp,
     gap_line,
-    pensieve_filename,
     render_transcript,
 )
 
@@ -158,17 +157,3 @@ def test_render_transcript_two_segment_concatenation_with_gap_marker() -> None:
         "[00:00:10 - 00:00:16] Ola Nordmann: Andre del.",
     ]
 
-
-# ---------------------------------------------------------------------------
-# pensieve_filename
-
-
-def test_pensieve_filename_sanitises_colon_and_slash() -> None:
-    assert (
-        pensieve_filename("Weekly quality sync: 2026/09/14")
-        == "Weekly quality sync_ 2026_09_14-transcript.txt"
-    )
-
-
-def test_pensieve_filename_plain_title() -> None:
-    assert pensieve_filename("Weekly quality sync") == "Weekly quality sync-transcript.txt"

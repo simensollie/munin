@@ -43,7 +43,6 @@ def _run(machine: FakeMachine) -> dict[str, CheckResult]:
 @pytest.fixture()
 def installed(machine: FakeMachine, monkeypatch: pytest.MonkeyPatch) -> FakeMachine:
     machine.run()
-    (machine.home / "pensieve" / "raw").mkdir(parents=True)
     machine.env["HOME"] = str(machine.home)
     # The detector spawns pw-dump itself, so it reads the *process* environment
     # rather than the env dict handed to run_checks. Point it at the shim, or a
@@ -101,7 +100,7 @@ def test_each_check_reports_what_it_found(installed: FakeMachine) -> None:
     # The PoC's visible end state: no backend, and doctor says so out loud.
     assert checks["transcription"].status == "warn"
     assert "deferred" in checks["transcription"].detail
-    assert checks["pensieve"].status == "ok"
+    assert "pensieve" not in checks
 
 
 def test_platform_table_has_one_populated_column(installed: FakeMachine) -> None:

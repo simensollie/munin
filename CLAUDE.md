@@ -5,25 +5,32 @@ Guidance for Claude Code working in this repository.
 ## What this repo is
 
 Munin: a cross-platform digital meeting recorder and transcription pipeline
-(two-track capture → self-hosted Whisper + pyannote → transcript in
-`pensieve/raw/`).
+(two-track capture → self-hosted Whisper + pyannote → transcript in the session
+directory under `~/munin/recordings/`).
 
-**Current state: design only. There is no application code, no build, no
-tests.** The repo contains a README, a licence, a spec, an implementation plan,
-design sketches and one render script. Do not invent build or test commands for
-the application — there are none yet.
+**Current state: the PoC is built and installed.** `main` is the only branch.
+`src/munin/` holds the CLI, capture daemon and worker; `plugin/local.munin/` is
+the Omarchy shell plugin; `install.sh` installs the lot; `tests/` is a real
+suite. The PoC ships the `none` backend, so sessions capture and then stay
+`pending` by design. No model is downloaded and none is run.
 
-The one runnable thing is `tools/render-sketches.py`, which regenerates
-`docs/design/sketches/*.jpg` from `docs/design/munin-plugin-sketches.html`. Run
-it from the repo root after editing that HTML; it needs `chromium` and
-ImageMagick.
+```bash
+./install.sh --dry-run          # read the seven steps before running them
+./install.sh                    # install; never runs sudo
+~/.local/share/munin/venv/bin/python -m pytest
+munin doctor                    # 22 checks
+```
+
+`tools/render-sketches.py` regenerates `docs/design/sketches/*.jpg` from
+`docs/design/munin-plugin-sketches.html`. Run it from the repo root after
+editing that HTML; it needs `chromium` and ImageMagick.
 
 ## Source of truth
 
 `docs/superpowers/specs/2026-09-14-meeting-recorder-design.md` is the
 authoritative design. Read the relevant section before answering anything about
 how Munin should behave. It covers: problem, goals, non-goals, settled
-decisions (D1–D20), architecture, capture and Teams detection, pipeline
+decisions (D1–D24), architecture, capture and Teams detection, pipeline
 (including the voice register, §7.4.1) and M365 enrichment, transcription
 backends, Omarchy integration and the admin surface, Plaud export, failure
 handling, compliance, testing, open questions, install and setup, and four
@@ -38,7 +45,7 @@ Two companions:
 
 Two categories must not be confused:
 
-- **D1–D20 are settled.** Revisit only if the user explicitly reopens one.
+- **D1–D24 are settled.** Revisit only if the user explicitly reopens one.
 - **§14's open questions and Appendix D's "Not verified" list are open.** They
   need checking on real hardware. Never present them as decided, and never
   quietly resolve one by assumption — say what would have to be verified.
@@ -77,8 +84,9 @@ transcript samples in §7.5 use placeholder names (`Ola Nordmann`,
 - **Suggest, never auto-record** (D4). The daemon notifies; the user confirms.
   Calendar data enriches a session and never starts one.
 - **All data lives under `~/munin/`** (D18) — `recordings/YYYY/MM/<session>/`,
-  plus `voices/`, `inbox/`, `config.toml`. A copy of each transcript also goes
-  to `pensieve/raw/<sanitised title>-transcript.txt` (`:` and `/` → `_`).
+  plus `voices/`, `inbox/`, `config.toml`. **The session directory is the only
+  place a transcript is written** (D24). There is no copy to `pensieve` or
+  anywhere else; do not reintroduce one.
 - **Output format:** `[HH:MM:SS - HH:MM:SS] <display name>: <text>`, strictly
   monotonic segments, with a `.json` sidecar for word-level data. The `.txt` is
   the source of record.

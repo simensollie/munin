@@ -175,9 +175,9 @@ One module. Implement `munin.backends.base.Backend` (`transcribe(session) ->
 Transcript`, plus `available()`), register it in `backends/__init__.py`, and set
 `[transcribe] backend` in `config.toml`. The worker already drains the inbox,
 takes the lock, walks `pending → transcribing → done | failed`, renders
-`transcript.txt` through `pipeline/render.py` in the contracted format, writes
-the `pensieve` copy, and retries a session the moment a backend reports itself
-available. Diarization and voice matching stay local regardless of where ASR
+`transcript.txt` through `pipeline/render.py` in the contracted format into the
+session directory (the only place it is written, D24), and retries a session the
+moment a backend reports itself available. Diarization and voice matching stay local regardless of where ASR
 runs (D9); the `api` backend splits the pipeline exactly there (spec §8.1).
 Which of `local`, `ssh`, `api` comes first is the open decision from plan §5,
 and depends on where the model is hosted.

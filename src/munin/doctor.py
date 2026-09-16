@@ -587,13 +587,6 @@ def check_backend(env: DoctorEnv) -> CheckResult:
     return CheckResult("transcription", "ok", f"backend {backend!r}")
 
 
-def check_pensieve(env: DoctorEnv) -> CheckResult:
-    raw = env.config.pensieve_raw_dir
-    path = Path(raw).expanduser() if raw else env.home / "pensieve" / "raw"
-    if not path.is_dir():
-        return CheckResult("pensieve", "warn", f"{path} does not exist; transcripts land nowhere")
-    return CheckResult("pensieve", "ok", str(path))
-
 
 def check_platform_support(env: DoctorEnv) -> list[CheckResult]:
     """One row per platform column (spec 16.5). Only this one is populated."""
@@ -645,7 +638,6 @@ CHECKS: tuple[Check, ...] = (
     Check("disk space", "all", check_disk),
     Check("spool", "all", check_spool),
     Check("transcription", "all", check_backend),
-    Check("pensieve", "all", check_pensieve),
     Check("platform support", "all", check_platform_support),
 )
 

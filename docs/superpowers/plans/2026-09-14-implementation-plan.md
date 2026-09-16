@@ -145,21 +145,18 @@ Fixtures are synthetic or own-voice. No real customer audio in the test corpus.
 
 Numbers refer to the spec's §14.
 
-1. **OQ1 — where the authoritative transcript lives.** `pensieve` is personal;
-   transcripts of customer meetings are arguably company records. Blocks M12's
-   retention design.
-2. **OQ11 — does deleting a voice profile unname past transcripts?** Defensible
+1. **OQ11 — does deleting a voice profile unname past transcripts?** Defensible
    either way. Cheap now, awkward the first time someone asks.
-3. **Retention defaults.** Audio is ~11 MB an hour and loses value once the
+2. **Retention defaults.** Audio is ~11 MB an hour and loses value once the
    transcript is verified; transcripts are small and worth keeping. Proposed:
    audio 90 days, transcripts indefinitely.
-4. **Is Windows actually planned, or only possible?** The spec now assumes
+3. **Is Windows actually planned, or only possible?** The spec now assumes
    Linux → macOS → Windows (D21, §16). The portability work in M1 is cheap
    either way, but M14 is real scope that has never been costed.
-5. **OQ10 — unattended SSH auth.** A command-restricted key with no passphrase
+4. **OQ10 — unattended SSH auth.** A command-restricted key with no passphrase
    is less elegant than an unlocked agent and more likely to still work in a
    year.
-6. **Glossary location.** `examples/glossary.toml` is synthetic and belongs
+5. **Glossary location.** `examples/glossary.toml` is synthetic and belongs
    here. The real one is by definition a list of real customer, product and
    colleague names — exactly what cannot enter this public repo. It lives at
    `~/munin/glossary.toml`; whether it is also version-controlled somewhere
@@ -167,7 +164,7 @@ Numbers refer to the spec's §14.
 
 ## 8. What to do first
 
-1. Decide item 6 above (glossary location); it is cheap and blocks M7.
+1. Decide item 5 above (glossary location); it is cheap and blocks M7.
 2. Start M1, base interfaces before Linux implementations (§16.5).
 3. Test `voxtype`'s `pause_media` against a live Teams call when one is next
    convenient. Not blocking; the mitigation is one config line.

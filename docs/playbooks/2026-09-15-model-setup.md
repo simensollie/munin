@@ -9,9 +9,9 @@ pull` and `munin doctor` will eventually do without being asked.
 installed. Every step verifies before it changes anything, so it is safe to run
 on a working desktop.
 
-On the `poc` branch `src/munin/pipeline/asr.py` and `pipeline/diarize.py` are
-stubs that raise `NotImplementedError`. This playbook sets up what they will
-load; it does not make them work.
+`src/munin/pipeline/asr.py` and `pipeline/diarize.py` are stubs that raise
+`NotImplementedError`. This playbook sets up what they will load; it does not
+make them work.
 
 **Time:** about 30 minutes, most of it download.
 **Disk:** ~7.2 GB final, with a transient peak near 13 GB during step 5.

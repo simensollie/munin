@@ -2,6 +2,7 @@
 
 **Status:** Frozen for the PoC build
 **Date:** 2026-09-14
+**Amended:** 2026-09-16 — D24 removed the `pensieve` copy. **Breaking**, see below.
 **Implements:** [`2026-09-14-meeting-recorder-design.md`](2026-09-14-meeting-recorder-design.md) (the spec)
 **Sequences against:** [`../plans/2026-09-14-implementation-plan.md`](../plans/2026-09-14-implementation-plan.md)
 
@@ -25,6 +26,24 @@ glossary, M365 enrichment, Plaud export, `mixed.mp3`, admin web UI, `ssh` and
 The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
+
+### Amendment 2026-09-16 (D24): breaking
+
+The `pensieve` copy is removed. Three frozen surfaces changed:
+
+| Surface | Before | After |
+|---|---|---|
+| `session.json` `transcript` | `{txt, json, pensieve_copy}` | `{txt, json}` |
+| `config.toml` | `[pensieve] raw_dir` | section removed |
+| `pipeline/render.py` | exports `pensieve_filename(title)` | removed |
+
+Migration: a `session.json` written before this amendment carries a
+`pensieve_copy` key that nothing reads any more; it is inert, and no rewrite is
+needed. A `config.toml` carrying `[pensieve]` still loads, with `pensieve` in
+`unknown_keys` so `munin doctor` says so. Any caller of `pensieve_filename` is
+a hard break, so the function is gone rather than deprecated. The PoC ships the
+`none` backend, so no transcript has been produced by this build and no data
+migration exists.
 
 **This document is frozen.** Six workstreams code against it in parallel. A
 workstream that finds a contract wrong reports it as a **deviation** (to the
@@ -207,7 +226,7 @@ by state (§4).
   "checksums": { "mic.opus": "sha256:…", "app.opus": "sha256:…" },
   "pending_reason": "no transcription backend configured",
   "error": null,
-  "transcript": { "txt": null, "json": null, "pensieve_copy": null },
+  "transcript": { "txt": null, "json": null },
   "history": [
     { "at": "2026-09-14T13:25:08+02:00", "from": null, "to": "recording", "by": "munin-rec" }
   ]
@@ -272,7 +291,7 @@ it.
 | `captured` | `pending` | `munin-work` | The worker has seen the session and queued it. |
 | `pending` | `transcribing` | `munin-work` | A backend is available and has been handed the session. |
 | `transcribing` | `pending` | `munin-work` | On worker start: any session left `transcribing` is reset (spec §11, crash recovery). |
-| `transcribing` | `done` | `munin-work` | `transcript.txt` written and the pensieve copy made. |
+| `transcribing` | `done` | `munin-work` | `transcript.txt` and `transcript.json` written into the session directory. |
 | `pending`/`transcribing` | `failed` | `munin-work` | Unrecoverable pipeline error. Audio is retained. |
 
 **Ownership rule (spec §11): after `captured`, only the worker writes `state`.**
@@ -621,8 +640,6 @@ inbox        = "inbox"
 voices       = "voices"
 log          = "munin.log"
 
-[pensieve]
-raw_dir = "~/pensieve/raw"
 
 [capture]
 mic_source   = "default"     # "default" or a PipeWire node name / object.serial
@@ -716,7 +733,6 @@ GAP_TEMPLATE = "[{ts}] --- recording resumed (gap {minutes} min) ---"
 def format_timestamp(seconds: float) -> str        # "HH:MM:SS", hours unbounded (D7)
 def gap_line(at_seconds: float, gap_seconds: float) -> str
 def render_transcript(transcript: Transcript, *, gaps: Sequence[tuple[float, float]] = ()) -> str
-def pensieve_filename(title: str) -> str           # "<title>-transcript.txt"
 ```
 
 - Line format, exactly: `[HH:MM:SS - HH:MM:SS] <display name>: <text>`.
@@ -727,8 +743,8 @@ def pensieve_filename(title: str) -> str           # "<title>-transcript.txt"
   are offset by the summed duration of segments 1…*k*−1. Wall-clock gaps between
   segments appear only as a gap line, so a 3-minute break does not silently
   become 3 minutes of missing audio in the timeline.
-- `pensieve_filename` replaces `:` and `/` with `_` and appends
-  `-transcript.txt`; the copy lands in `pensieve.raw_dir`.
+- The transcript is written into the session directory and nowhere else (D24).
+  There is no second copy and no second filename convention.
 
 ---
 

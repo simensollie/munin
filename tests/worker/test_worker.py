@@ -21,7 +21,6 @@ import pytest
 
 from munin.backends.base import BackendUnavailable, Transcript, TranscriptSegment
 from munin.config import Config
-from munin.pipeline.render import pensieve_filename
 from munin.spool import Segment, Session, StateError
 from munin.worker import STALE_TRANSCRIBING_REASON, Worker, _compute_gaps
 
@@ -102,7 +101,7 @@ def _make_session(
 
 
 def _config(tmp_path: Path) -> Config:
-    return Config(home=tmp_path / "home", pensieve_raw_dir=tmp_path / "pensieve")
+    return Config(home=tmp_path / "home")
 
 
 # ---------------------------------------------------------------------------
@@ -133,13 +132,16 @@ def test_process_success_writes_transcript_and_transitions_to_done(tmp_path, mon
     assert payload["words"] == [{"start": 0.0, "end": 0.5, "text": "Hei"}]
     assert payload["adjustments"] == []
 
-    pensieve_path = tmp_path / "pensieve" / pensieve_filename("Weekly quality sync")
-    assert pensieve_path.read_text(encoding="utf-8") == txt_path.read_text(encoding="utf-8")
+    # D24: the session directory is the only place a transcript is written.
+    # (FakeSpool does not write session.json, so these are all the files there.)
+    assert sorted(p.name for p in session.directory.iterdir() if p.is_file()) == [
+        "transcript.json",
+        "transcript.txt",
+    ]
 
     assert session.transcript == {
         "txt": str(txt_path),
         "json": str(json_path),
-        "pensieve_copy": str(pensieve_path),
     }
     assert worker.spool.unlinked == [session.id]
 

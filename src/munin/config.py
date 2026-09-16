@@ -87,9 +87,6 @@ inbox      = "inbox"
 voices     = "voices"
 log        = "munin.log"
 
-[pensieve]
-# A copy of every finished transcript lands here, named "<title>-transcript.txt".
-raw_dir = "~/pensieve/raw"
 
 [capture]
 # "default" follows the PipeWire default source; otherwise a node name or an
@@ -215,7 +212,6 @@ class Config:
     transcribe: TranscribeConfig = field(default_factory=TranscribeConfig)
     idle: IdleConfig = field(default_factory=IdleConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
-    pensieve_raw_dir: Path | None = None
     unknown_keys: tuple[str, ...] = ()
     source_path: Path | None = None
 
@@ -412,16 +408,6 @@ def load(path: Path | None = None) -> Config:
     idle_known = _section(raw, "idle", unknown)
     notifications_known = _section(raw, "notifications", unknown)
 
-    pensieve_table = raw.get("pensieve", {})
-    if not isinstance(pensieve_table, dict):
-        raise ConfigError("[pensieve] must be a table")
-    raw_dir = pensieve_table.get("raw_dir", "~/pensieve/raw")
-    if not isinstance(raw_dir, str):
-        raise ConfigError("[pensieve] raw_dir must be a string")
-    for key in pensieve_table:
-        if key != "raw_dir":
-            unknown.append(f"pensieve.{key}")
-
     for name in raw:
         if name not in {
             "munin",
@@ -431,7 +417,6 @@ def load(path: Path | None = None) -> Config:
             "transcribe",
             "idle",
             "notifications",
-            "pensieve",
         }:
             unknown.append(name)
 
@@ -475,7 +460,6 @@ def load(path: Path | None = None) -> Config:
         ),
         idle=IdleConfig(**idle_known),
         notifications=NotificationConfig(**notifications_known),
-        pensieve_raw_dir=Path(raw_dir).expanduser(),
         unknown_keys=tuple(unknown),
         source_path=source_path,
     )
@@ -486,7 +470,6 @@ def defaults(home: Path | None = None) -> Config:
     return Config(
         home=home if home is not None else munin_home(),
         detection=DetectionConfig(apps=DEFAULT_APP_RULES),
-        pensieve_raw_dir=Path("~/pensieve/raw").expanduser(),
     )
 
 

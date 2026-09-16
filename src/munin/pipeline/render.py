@@ -13,8 +13,8 @@ segments are offset by the summed duration of the earlier ones, and the
 wall-clock break shows up as a gap line rather than as missing audio.
 
 Owner: worker workstream. Signatures fixed by PoC contracts section 10:
-``GAP_TEMPLATE``, ``format_timestamp``, ``gap_line``, ``render_transcript`` and
-``pensieve_filename`` keep exactly their documented signatures. ``adjust_segments``
+``GAP_TEMPLATE``, ``format_timestamp``, ``gap_line`` and ``render_transcript``
+keep exactly their documented signatures. ``adjust_segments``
 is additional surface this workstream added so the worker can put the same
 clamp/drop report into the ``transcript.json`` sidecar that ``render_transcript``
 already applies to the ``.txt`` -- the contract asks for both from one
@@ -32,7 +32,6 @@ __all__ = [
     "format_timestamp",
     "gap_line",
     "render_transcript",
-    "pensieve_filename",
     "adjust_segments",
 ]
 
@@ -138,11 +137,3 @@ def render_transcript(
         return ""
     return "\n".join(line for _, _, line in lines) + "\n"
 
-
-def pensieve_filename(title: str) -> str:
-    """``<title>-transcript.txt`` with ``:`` and ``/`` replaced by ``_``.
-
-    Matches the existing pensieve ingest convention exactly (spec 7.5).
-    """
-    sanitised = title.replace(":", "_").replace("/", "_")
-    return f"{sanitised}-transcript.txt"

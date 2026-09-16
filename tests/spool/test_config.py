@@ -49,7 +49,6 @@ def test_a_missing_file_is_not_an_error(munin_home: Path) -> None:
     assert cfg.idle.method == "omarchy-stay-awake"
     assert cfg.notifications.enabled is True
     assert cfg.notifications.glyph == "\U000f0ec2"
-    assert cfg.pensieve_raw_dir == Path("~/pensieve/raw").expanduser()
     assert cfg.unknown_keys == ()
 
 
@@ -135,11 +134,11 @@ def test_the_configured_home_is_used_when_the_variable_is_unset(
     assert load(path).home == elsewhere
 
 
-def test_pensieve_raw_dir_expands(munin_home: Path) -> None:
+def test_a_pre_d24_pensieve_section_is_unknown_not_fatal(munin_home: Path) -> None:
+    """Configs written before D24 still load; the dead section is reported."""
     write(munin_home, '[pensieve]\nraw_dir = "~/pensieve/raw"\n')
     cfg = load()
-    assert cfg.pensieve_raw_dir == Path("~/pensieve/raw").expanduser()
-    assert "~" not in str(cfg.pensieve_raw_dir)
+    assert "pensieve" in cfg.unknown_keys
 
 
 def test_a_fallback_chain_is_read_in_order(munin_home: Path) -> None:
