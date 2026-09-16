@@ -85,6 +85,7 @@ second customer name appears zero times in 756,000 words.
 | D20 | The shell plugin never captures | A shell hot-reload or crash must never kill a recording; capture lives in a systemd daemon (§9.1) |
 | D21 | Munin implements its own capture; no dependency on `voxtype` | `voxtype meeting` covers part of the Linux capture layer, but is Linux-only. Building on it would mean writing the same layer twice more for macOS and Windows, after the pipeline had shaped itself around another tool's data model (§16) |
 | D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
+| D23 | The `local` backend never imports the model stack; it runs it in a separate interpreter as a subprocess | Munin is stdlib-only and installs against the system Python, which on the reference desktop is 3.14; the pinned pyannote/faster-whisper/torch set needs 3.12. A process boundary keeps the two lifecycles independent, matches how every other external tool is invoked, and costs only interpreter startup, since D22 already reloads the model per job (§8.1) |
 
 ## 5. Architecture
 

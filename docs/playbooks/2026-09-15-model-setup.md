@@ -69,6 +69,15 @@ Python 3.12: pyannote.audio 4.x requires `>=3.10`, faster-whisper requires
 `>=3.9`, and spec §15 asks for 3.12+. 3.12 satisfies all three and is what
 torch wheels are best tested against.
 
+**This venv is the backend's, not Munin's.** `install.sh` builds its own venv at
+`~/.local/share/munin/venv` from the system `python3`, which on the reference
+desktop is 3.14. Munin declares no Python dependencies, so 3.14 is fine for it
+and unusable for the pinned model set. The two never merge: under D23 the
+`local` backend invokes `~/munin/.venv/bin/python` as a subprocess rather than
+importing `faster_whisper` into the worker. Install Munin first; it creates the
+`~/munin/` root this playbook writes into, and it fails in seconds rather than
+after a 30-minute download.
+
 ## Step 2. Install the stack
 
 Order matters. Install pyannote first, because it pulls torch, and recent torch
@@ -106,8 +115,11 @@ export LD_LIBRARY_PATH=$(python -c 'import os, nvidia.cublas.lib, nvidia.cudnn.l
 ```
 
 `LD_LIBRARY_PATH` must be set **before** the process starts, not from inside
-it. For `munin-work` that means an `Environment=` line in the systemd user
-unit, never a `os.environ[...]` assignment in Python.
+it, so never an `os.environ[...]` assignment in the process that needs it.
+Under D23 the process that needs it is the backend subprocess, not
+`munin-work`, so the `local` backend sets it in the child's environment when it
+spawns. That is better than an `Environment=` line in the systemd unit, which
+would put a cuDNN path on the library path of a worker that never loads cuDNN.
 
 ## Step 3. Hugging Face cache and token
 
