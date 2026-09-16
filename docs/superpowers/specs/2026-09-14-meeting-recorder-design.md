@@ -72,7 +72,7 @@ second customer name appears zero times in 756,000 words.
 | D5 | Self-hosted Whisper, not Plaud upload | Plaud upload is only reachable via an undocumented consumer endpoint in a different auth realm (Appendix A) |
 | D6 | Two ASR models, routed by detected language | Corpus is 112 English-dominant vs 92 Norwegian-dominant files |
 | D7 | Output timestamps become `HH:MM:SS` | Deliberate break from Plaud's `MM:SS`, which produces `[103:06 - 103:07]` on long meetings |
-| D8 | Glossary is generated, not hand-maintained | Sources already exist (§7.3); a hand-list would rot |
+| D8 | The glossary is user-defined. Munin proposes corrections, never terms | The user is the only authority on what a term should be; a generator that invents canonical spellings from a wiki or a directory is guessing, and a wrong guess is written into an audit transcript. Mining the user's own transcripts for misspellings of terms they already defined is the half that was actually valuable (§7.3) |
 | D9 | ASR may be remote; diarization and voice matching are always local | `/v1/audio/transcriptions` has no speaker field (§8.1) |
 | D10 | Recording state is always visible in the bar | Consent and self-awareness; also the only reliable stop control |
 | D11 | Mixed audio is retained for manual Plaud upload | Plaud summaries stay available as a separate, opt-in process (§10) |
@@ -262,33 +262,40 @@ No quantization and no distilled variants. `nb-whisper-large-distil-turbo-beta`
 exists and is within ~1% WER at 6x the speed, but speed is not the binding
 constraint (§8), so we take the accuracy.
 
-### 7.3 Domain glossary and person list (generated)
+### 7.3 Domain glossary and person list (user-defined)
 
-The glossary is **built, not hand-written**. `munin glossary build` pulls
-canonical terms from sources that already exist and stay current:
+**The glossary is written by the user (D8).** Munin never invents a canonical
+term. `~/munin/glossary.toml` is a file the user owns, authors and edits, and
+nothing writes a `canonical` spelling into it but them.
 
-| Source | Yields |
-|---|---|
-| Second-brain wiki filenames + `index.md` display names | products, features, customers, competitors |
-| M365 calendar attendees (accumulated) | colleague and customer names, with emails |
-| M365 directory (`search_people`) | the wider org |
-| The issue tracker | project and feature names |
-| The existing 204 Plaud transcripts | frequency-ranked proper nouns |
+An earlier draft generated the list from the second-brain wiki, M365 attendees,
+the M365 directory and the issue tracker. That is removed. A generator reading
+those sources is guessing at what a term *should* be, and the cost of a wrong
+guess is a wrong name written into a transcript that an auditor later reads. It
+also pulled colleague and customer names out of the org directory into a local
+file as a side effect of a convenience feature, which is a data-minimisation
+problem nobody asked for (§12).
 
-Discovering the *corruptions* is the second half and the valuable one. The corpus
-contains both the correct and the corrupted form of most terms, so: take rare
-tokens, compare against the canonical list, propose mappings. Edit distance alone
-will not find a Norwegian common noun substituted for an English product name,
-because that is a phonetic collision in a Norwegian mouth rather than a typo.
-This is therefore a batch job for Claude over the frequency-ranked
-unknown-token list, human-reviewed once, then topped up after each run.
+What was valuable in that draft was the other half: discovering the
+*corruptions*. That stays, and it needs no external source, because the evidence
+is already in the user's own transcripts. Both the correct and the corrupted
+form of most terms appear there, so: take rare tokens, compare against the terms
+the user has already defined, propose mappings. Edit distance alone will not find
+a Norwegian common noun substituted for an English product name, because that is
+a phonetic collision in a Norwegian mouth rather than a typo. This is therefore a
+batch job for Claude over the frequency-ranked unknown-token list.
+
+`munin glossary suggest` runs it and **proposes only**. Every proposal is a
+`corrections` entry attached to a term the user already wrote; none of them can
+introduce a term, and none is applied until the user accepts it. An empty
+glossary produces no suggestions, which is correct: with nothing defined there is
+nothing to have misspelled.
 
 #### 7.3.1 `glossary.toml`
 
-The output is a single file at `~/munin/glossary.toml` that the user owns and
-can edit by hand. `munin glossary build` regenerates it, but any entry a human
-has touched is marked `reviewed = true` and is never overwritten — the generator
-adds and proposes, it does not overrule.
+A single file at `~/munin/glossary.toml`, authored by the user. Munin reads it
+and never rewrites it: `munin glossary suggest` prints proposed `corrections`
+for the user to paste in or accept, and writes nothing on its own.
 
 A complete annotated example is in
 [`examples/glossary.toml`](../../../examples/glossary.toml), built to mirror the
@@ -323,8 +330,7 @@ Three parts of that schema exist because blind replacement is dangerous:
 `munin glossary` subcommands:
 
 ```
-munin glossary build            # regenerate, preserving reviewed entries
-munin glossary review           # walk unreviewed proposals, one by one
+munin glossary suggest          # mine own transcripts for misspellings of defined terms
 munin glossary lint             # unreachable rules, collisions, protect conflicts
 munin glossary test <session>   # show what would change in an existing transcript
 ```
@@ -338,8 +344,10 @@ consumes the same text.
 (half of Whisper's 448-token decoder context; anything longer is silently
 truncated):
 
-1. **Decode-time bias**: ~40 terms selected per meeting from calendar context.
-   An invite naming a customer promotes that customer's terms.
+1. **Decode-time bias**: ~40 terms picked per meeting *from the user's
+   glossary*, with calendar context deciding which ones. An invite naming a
+   customer promotes that customer's terms. The calendar chooses among defined
+   terms; it never contributes one (D8).
 2. **Post-correction**: the full mapping applied to the output text afterwards,
    deterministic replacements first, then an LLM review pass for the rest.
 
@@ -692,7 +700,7 @@ munin voice disable ola
 munin voice delete ola
 munin voice reembed --all
 munin review
-munin glossary build | review | lint | test <session>
+munin glossary suggest | lint | test <session>
 ```
 
 `munin voice reembed --all` is why enrolment clips are retained (§7.4.1): a
@@ -767,6 +775,11 @@ Flagging explicitly rather than burying it:
   section in that proposal, not a footnote.
 - **ISO 27001.** A transcript store accumulating customer commercial detail is a
   new asset with its own access control and retention requirements.
+- **Data minimisation in the glossary.** Settled by D8. The earlier generated
+  glossary would have copied colleague and customer names, with emails, out of
+  the M365 directory into a local file, as a side effect of a convenience
+  feature. A user-written glossary holds only the terms the user chose to put
+  there, which is the smaller and more defensible set.
 - **Personal vault, work content.** Settled by D24. The second brain is personal
   and transcripts of customer meetings are company records, so Munin no longer
   writes into it. The authoritative copy is the session directory under

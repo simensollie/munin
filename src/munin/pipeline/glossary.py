@@ -1,4 +1,4 @@
-"""The domain glossary: built, not hand-written, from second-brain and M365 sources.
+"""The domain glossary: written by the user, never generated (D8).
 See spec section 7.3.
 
 Not implemented in the PoC -- there is no ASR output for a glossary to

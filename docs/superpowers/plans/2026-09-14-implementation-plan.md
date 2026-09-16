@@ -81,7 +81,7 @@ munin/
 | M4a | GPU courtesy | `keep_warm = false` path, `defer_when_busy` VRAM check before claiming a session, CUDA OOM treated as an unreachable sink (D22, spec §8.2) | M4 | A session defers while the GPU is committed elsewhere and drains when it frees |
 | M5 | `munin doctor` and `install.sh` | One-command install, wizard, check | M3, M4 | A clean machine reaches a working recording without reading the spec |
 | M6 | Evaluation harness | Held-out Plaud set, hand-corrected references, WER and glossary recall | M4 | Baseline numbers for Plaud vs Munin on the same audio |
-| M7 | Glossary | `munin glossary build`, corruption discovery, two-stage injection | M6 | §13's 100% glossary-term recall met and measured |
+| M7 | Glossary | User-written `glossary.toml` (D8), two-stage injection, `munin glossary suggest` for corruption discovery over own transcripts | M6 | §13's 100% glossary-term recall met and measured |
 | M8 | Voice register + admin | Profiles, review queue, tier 2 matching, admin surface | M4 | A colleague is named correctly in an ad-hoc call with no invite |
 | M9 | M365 enrichment | Titles, attendees, agenda biasing, series-level opt-out | M4 | Sessions carry real titles; agenda terms reach the decode prompt |
 | M10 | `ssh` backend | Push audio, run remote worker, pull transcript | M4, OQ10 | Mini PC records, desktop transcribes, same text as `local` |
@@ -158,7 +158,9 @@ Numbers refer to the spec's §14.
    year.
 5. **Glossary location.** `examples/glossary.toml` is synthetic and belongs
    here. The real one is by definition a list of real customer, product and
-   colleague names — exactly what cannot enter this public repo. It lives at
+   colleague names — exactly what cannot enter this public repo. Under D8 it is
+   also hand-written, so it is the only copy of real user effort and losing it
+   costs more than a rebuild. It lives at
    `~/munin/glossary.toml`; whether it is also version-controlled somewhere
    private needs deciding before M7.
 

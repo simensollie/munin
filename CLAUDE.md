@@ -94,8 +94,11 @@ transcript samples in §7.5 use placeholder names (`Ola Nordmann`,
   `munin-rec` captures. A shell hot-reload must never kill a recording.
 - **Naming a speaker and enrolling a voice are separate actions** (D17). A voice
   profile is a name and an embedding, stored locally under `~/munin/voices/`.
-- **The glossary** is `~/munin/glossary.toml`, schema in spec §7.3.1 with a
-  synthetic template at `examples/glossary.toml`. A real glossary is a list of
+- **The glossary is user-defined** (D8). `~/munin/glossary.toml` is written by
+  the user; Munin reads it and never rewrites it. `munin glossary suggest`
+  mines the user's own transcripts for misspellings of terms they already
+  defined and proposes `corrections` only, never a new term. Schema in spec
+  §7.3.1, synthetic template at `examples/glossary.toml`. A real glossary is a list of
   real customer, product and colleague names, so it never enters this repo —
   keep `examples/glossary.toml` synthetic when editing it.
 - **Shell scripts:** bash, `set -euo pipefail`, a comment block explaining
