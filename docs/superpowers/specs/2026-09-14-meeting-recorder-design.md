@@ -84,6 +84,7 @@ second customer name appears zero times in 756,000 words.
 | D19 | Three transcription backends — `local`, `ssh`, `api` — in an ordered fallback chain | One interface covers a GPU desktop, a headless mini PC and a shared gateway (§8) |
 | D20 | The shell plugin never captures | A shell hot-reload or crash must never kill a recording; capture lives in a systemd daemon (§9.1) |
 | D21 | Munin implements its own capture; no dependency on `voxtype` | `voxtype meeting` covers part of the Linux capture layer, but is Linux-only. Building on it would mean writing the same layer twice more for macOS and Windows, after the pipeline had shaped itself around another tool's data model (§16) |
+| D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
 
 ## 5. Architecture
 
@@ -241,9 +242,17 @@ correctly without intervention.
 | `openai/whisper-large-v3` | English | ~3.1 GB |
 | `pyannote/speaker-diarization-3.1` | diarization | ~1 GB |
 
-Both ASR models stay resident (~6 GB). Model load dominates inference at this
-volume, so keeping both warm is what makes single-digit-minute latency possible
-on a queue that fires a few times a day.
+The two ASR models total ~6 GB in fp16, ~7 GB with pyannote alongside during
+diarization. Model load dominates inference at this volume, so holding both
+resident (`keep_warm`) removes roughly a minute per job.
+
+**`keep_warm` defaults to `false` (D22).** The latency argument holds only on a
+GPU that is otherwise idle. On the reference desktop (RTX 3070, 8 GB) resident
+models would hold ~6 GB around the clock for a workload that is busy about four
+minutes a day, leaving nothing for games, other local models or video work. The
+pipeline is asynchronous and spooled, so nobody waits on the minute it costs.
+Set `keep_warm = true` only on a machine dedicated to transcription, where the
+VRAM has no competing claim.
 
 No quantization and no distilled variants. `nb-whisper-large-distil-turbo-beta`
 exists and is within ~1% WER at 6x the speed, but speed is not the binding
@@ -472,7 +481,9 @@ fallback = ["ssh", "api"]     # tried in order; session stays spooled if none an
 device = "cuda"               # cuda | vulkan | cpu
 model_no = "NbAiLab/nb-whisper-large"
 model_en = "openai/whisper-large-v3"
-keep_warm = true              # both resident: load dominates inference at this volume
+keep_warm = false             # D22: VRAM free between jobs; costs ~1 min load per job
+defer_when_busy = true        # D22: wait for the GPU rather than compete with it
+busy_vram_free_mb = 7000      # below this much free VRAM, the session stays spooled
 
 [transcribe.ssh]
 host = "desktop.lan"
@@ -519,6 +530,27 @@ Two capabilities decide whether a given endpoint is usable, and `munin doctor`
 
 If either is missing, the fallback is a direct connection to the whisper server
 behind the gateway, bypassing it for this one workload.
+### 8.2 Sharing the GPU with the user
+
+The `local` backend runs on a machine that is also driving a compositor, a
+browser and sometimes a game. At the reference 3070 rate a median meeting is
+~3-4 minutes of saturated GPU, so the contention window is small, but it is
+unpredictable and lands whenever a meeting ends. Two settings keep Munin from
+being the process that ruins an evening (D22):
+
+- `keep_warm = false` holds VRAM only while a job runs, not around the clock.
+- `defer_when_busy = true` makes the worker check free VRAM before claiming a
+  session, and leave it spooled if the card is committed elsewhere. Deferral is
+  not a failure: §11 already retries with backoff, and the design principle is
+  that transcripts arrive late, never missing.
+
+Capture is unaffected either way. `munin-rec` never transcribes (D20) and never
+touches the GPU, so a saturated card cannot cost a recording.
+
+`[diarize]` is always local (D9), so `ssh` and `api` still put pyannote on the
+local GPU for about a minute per session. Offloading ASR reduces the window, it
+does not remove it.
+
 ## 9. Desktop integration (Omarchy)
 
 Conventions read from `~/dev/dotfiles/omarchy`; see Appendix D for what is
@@ -692,6 +724,7 @@ The design principle is that transcripts arrive late, never missing.
 | Failure | Behaviour |
 |---|---|
 | No sink reachable | Session stays in spool, retried with backoff. Nothing is lost. |
+| GPU busy or out of VRAM | Session stays spooled and is retried once the card frees up (`defer_when_busy`, §8.2). A CUDA OOM mid-job is treated as an unreachable sink, not a worker crash. |
 | Worker crashes mid-file | Session state is `transcribing`; reset to `pending` on worker start. |
 | Meeting runs past scheduled end | Capture continues until the application stream has been silent for 2 minutes. |
 | Calendar unreachable | Ad-hoc mode: capture still triggers on application audio, title falls back to timestamp. |

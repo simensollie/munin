@@ -78,6 +78,7 @@ munin/
 | M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard | M1 | Ad-hoc path works with no calendar and no detection |
 | M3 | Shell plugin | Detection, three notifications, bar states, dropdown panel | M0, M2 | Joining a Teams call prompts; the bar shows state throughout |
 | M4 | Pipeline on `local` | Language routing, ASR, diarization, attribution tiers 1/3/4, output format | M1 | A captured meeting yields a conformant transcript |
+| M4a | GPU courtesy | `keep_warm = false` path, `defer_when_busy` VRAM check before claiming a session, CUDA OOM treated as an unreachable sink (D22, spec §8.2) | M4 | A session defers while the GPU is committed elsewhere and drains when it frees |
 | M5 | `munin doctor` and `install.sh` | One-command install, wizard, check | M3, M4 | A clean machine reaches a working recording without reading the spec |
 | M6 | Evaluation harness | Held-out Plaud set, hand-corrected references, WER and glossary recall | M4 | Baseline numbers for Plaud vs Munin on the same audio |
 | M7 | Glossary | `munin glossary build`, corruption discovery, two-stage injection | M6 | §13's 100% glossary-term recall met and measured |
