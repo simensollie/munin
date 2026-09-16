@@ -17,8 +17,9 @@ backends, install flow. Open questions 4, 5 and 6 answered on the machine.
 ## 1. Problem
 
 Meetings are currently recorded with Plaud on a MacBook and transcribed by Plaud's
-cloud. Transcripts land in `pensieve/raw/` via the `plaud` CLI and are distilled
-into the wiki by hand (with Claude). That is the arrangement being replaced;
+cloud. Transcripts land in the second brain's raw folder via the `plaud` CLI and
+are distilled into the wiki by hand (with Claude). That is the arrangement being
+replaced;
 Munin writes its transcripts under `~/munin/` and nowhere else (D24).
 
 Two things break this:
@@ -53,8 +54,8 @@ second customer name appears zero times in 756,000 words.
 
 - **Physical / in-room meetings.** Out of scope. Those stay on Plaud.
 - **Real-time captions.** This is a batch pipeline.
-- **Replacing Plaud's AI summaries.** `pensieve` ingest does its own distillation
-  with Claude and never consumes Plaud's `Summary.md`.
+- **Replacing Plaud's AI summaries.** Second-brain ingest does its own
+  distillation with Claude and never consumes Plaud's `Summary.md`.
 - **A general GUI.** Daemon plus CLI. Two exceptions: the Omarchy bar plugin
   (§9.2) and a loopback admin surface for the voice register and backends (§9.5).
 - **Real-time speaker identification.** Voice matching runs in the worker after
@@ -87,7 +88,7 @@ second customer name appears zero times in 756,000 words.
 | D21 | Munin implements its own capture; no dependency on `voxtype` | `voxtype meeting` covers part of the Linux capture layer, but is Linux-only. Building on it would mean writing the same layer twice more for macOS and Windows, after the pipeline had shaped itself around another tool's data model (§16) |
 | D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
 | D23 | The `local` backend never imports the model stack; it runs it in a separate interpreter as a subprocess | Munin is stdlib-only and installs against the system Python, which on the reference desktop is 3.14; the pinned pyannote/faster-whisper/torch set needs 3.12. A process boundary keeps the two lifecycles independent, matches how every other external tool is invoked, and costs only interpreter startup, since D22 already reloads the model per job (§8.1) |
-| D24 | The session directory is the only place a transcript is written; no copy goes to `pensieve` | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
+| D24 | The session directory is the only place a transcript is written; no copy goes to the second brain | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
 
 ## 5. Architecture
 
@@ -268,7 +269,7 @@ canonical terms from sources that already exist and stay current:
 
 | Source | Yields |
 |---|---|
-| `pensieve` wiki filenames + `index.md` display names | products, features, customers, competitors |
+| Second-brain wiki filenames + `index.md` display names | products, features, customers, competitors |
 | M365 calendar attendees (accumulated) | colleague and customer names, with emails |
 | M365 directory (`search_people`) | the wider org |
 | The issue tracker | project and feature names |
@@ -429,9 +430,10 @@ maintain. `session.json` is the only file the worker writes state into, so a
 half-finished session is always identifiable after a crash.
 
 **The session directory is the only place a transcript is written (D24).**
-There is no second copy. An earlier draft mirrored every transcript into
-`~/pensieve/raw/`; that is removed, because `pensieve` is a personal vault and
-these transcripts are company records (§12). Anything that wants a flat list
+There is no second copy. An earlier draft mirrored every transcript into the
+second brain's raw folder; that is removed, because the second brain is a
+personal vault and these transcripts are company records (§12). Anything that
+wants a flat list
 reads the tree, which `grep -r` already searches with no index to maintain.
 
 ```
@@ -765,8 +767,8 @@ Flagging explicitly rather than burying it:
   section in that proposal, not a footnote.
 - **ISO 27001.** A transcript store accumulating customer commercial detail is a
   new asset with its own access control and retention requirements.
-- **Personal vault, work content.** Settled by D24. `pensieve` is personal and
-  transcripts of customer meetings are company records, so Munin no longer
+- **Personal vault, work content.** Settled by D24. The second brain is personal
+  and transcripts of customer meetings are company records, so Munin no longer
   writes into it. The authoritative copy is the session directory under
   `~/munin/`, which is the store that ISO 27001 access control and retention
   apply to. One store, one retention policy, one place to answer a deletion
@@ -820,7 +822,7 @@ Answered since the first draft, by reading the machine (Appendix D):
   one 16 kHz mono device), both receiving audio, no errors. See Appendix D.
 - ~~1. Where does the authoritative transcript live once work meetings are
   involved?~~ The session directory under `~/munin/`, and nowhere else (D24).
-  The `pensieve` copy is removed. Retention design now has a single store to
+  The second-brain copy is removed. Retention design now has a single store to
   apply to, which is what made this block M12.
 
 Still open:

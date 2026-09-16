@@ -100,7 +100,8 @@ def test_each_check_reports_what_it_found(installed: FakeMachine) -> None:
     # The PoC's visible end state: no backend, and doctor says so out loud.
     assert checks["transcription"].status == "warn"
     assert "deferred" in checks["transcription"].detail
-    assert "pensieve" not in checks
+    # D24 removed the second-brain copy, and the check that watched for it.
+    assert not any("brain" in name or "copy" in name for name in checks)
 
 
 def test_platform_table_has_one_populated_column(installed: FakeMachine) -> None:

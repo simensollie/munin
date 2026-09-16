@@ -78,7 +78,16 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
     assert data["transcribe"]["backend"] == "none"
     assert data["idle"]["method"] == "omarchy-stay-awake"
     assert data["notifications"]["glyph"] == "\U000f0ec2"
-    assert "pensieve" not in data
+    # D24: no second-brain copy, so no section configuring where it goes.
+    assert set(data) == {
+        "munin",
+        "paths",
+        "capture",
+        "detection",
+        "transcribe",
+        "idle",
+        "notifications",
+    }
 
 
 def test_default_config_matches_the_dataclass_defaults(tmp_path: Path) -> None:

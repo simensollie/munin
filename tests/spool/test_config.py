@@ -134,11 +134,11 @@ def test_the_configured_home_is_used_when_the_variable_is_unset(
     assert load(path).home == elsewhere
 
 
-def test_a_pre_d24_pensieve_section_is_unknown_not_fatal(munin_home: Path) -> None:
+def test_a_pre_d24_copy_section_is_unknown_not_fatal(munin_home: Path) -> None:
     """Configs written before D24 still load; the dead section is reported."""
-    write(munin_home, '[pensieve]\nraw_dir = "~/pensieve/raw"\n')
+    write(munin_home, '[second_brain]\nraw_dir = "~/notes/raw"\n')
     cfg = load()
-    assert "pensieve" in cfg.unknown_keys
+    assert "second_brain" in cfg.unknown_keys
 
 
 def test_a_fallback_chain_is_read_in_order(munin_home: Path) -> None:

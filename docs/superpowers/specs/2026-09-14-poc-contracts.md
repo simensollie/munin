@@ -2,7 +2,7 @@
 
 **Status:** Frozen for the PoC build
 **Date:** 2026-09-14
-**Amended:** 2026-09-16 — D24 removed the `pensieve` copy. **Breaking**, see below.
+**Amended:** 2026-09-16 — D24 removed the second-brain copy. **Breaking**, see below.
 **Implements:** [`2026-09-14-meeting-recorder-design.md`](2026-09-14-meeting-recorder-design.md) (the spec)
 **Sequences against:** [`../plans/2026-09-14-implementation-plan.md`](../plans/2026-09-14-implementation-plan.md)
 
@@ -29,21 +29,29 @@ ships and it never transcribes.
 
 ### Amendment 2026-09-16 (D24): breaking
 
-The `pensieve` copy is removed. Three frozen surfaces changed:
+The second-brain copy is removed. Three frozen surfaces changed:
 
 | Surface | Before | After |
 |---|---|---|
-| `session.json` `transcript` | `{txt, json, pensieve_copy}` | `{txt, json}` |
-| `config.toml` | `[pensieve] raw_dir` | section removed |
-| `pipeline/render.py` | exports `pensieve_filename(title)` | removed |
+| `session.json` `transcript` | `{txt, json, <copy-path key>}` | `{txt, json}` |
+| `config.toml` | a second-brain section with a `raw_dir` | section removed |
+| `pipeline/render.py` | exported a copy-filename helper | removed |
 
-Migration: a `session.json` written before this amendment carries a
-`pensieve_copy` key that nothing reads any more; it is inert, and no rewrite is
-needed. A `config.toml` carrying `[pensieve]` still loads, with `pensieve` in
-`unknown_keys` so `munin doctor` says so. Any caller of `pensieve_filename` is
-a hard break, so the function is gone rather than deprecated. The PoC ships the
-`none` backend, so no transcript has been produced by this build and no data
-migration exists.
+Migration:
+
+- **`session.json`** written before this amendment carries a third key under
+  `transcript` that nothing reads any more. It is inert, and no rewrite is
+  needed.
+- **`config.toml`** carrying the old section still loads; the section name
+  lands in `unknown_keys`, and `munin doctor` prints `unknown keys kept but
+  ignored`. Delete the section to clear the warning.
+- **The copy-filename helper** has no deprecation path, so a caller breaks at
+  import. Nothing calls it.
+- **No data migration exists.** The PoC ships the `none` backend, so this build
+  has never produced a transcript.
+
+The removed names are spelled out in the commit that made this change
+(`96f76c2`), which is the one place the old identifiers survive.
 
 **This document is frozen.** Six workstreams code against it in parallel. A
 workstream that finds a contract wrong reports it as a **deviation** (to the

@@ -85,7 +85,7 @@ transcript samples in §7.5 use placeholder names (`Ola Nordmann`,
   Calendar data enriches a session and never starts one.
 - **All data lives under `~/munin/`** (D18) — `recordings/YYYY/MM/<session>/`,
   plus `voices/`, `inbox/`, `config.toml`. **The session directory is the only
-  place a transcript is written** (D24). There is no copy to `pensieve` or
+  place a transcript is written** (D24). There is no copy to the second brain or
   anywhere else; do not reintroduce one.
 - **Output format:** `[HH:MM:SS - HH:MM:SS] <display name>: <text>`, strictly
   monotonic segments, with a `.json` sidecar for word-level data. The `.txt` is
