@@ -265,7 +265,15 @@ Field rules:
 (`mic.002.opus`). `munin.capture.base.segment_filenames(index)` is the single
 implementation; nothing else may construct these names.
 
-`mixed.mp3`, `transcript.*` and `markers.json` are not produced in the PoC.
+`transcript.*` and `markers.json` are not produced in the PoC. The mix is:
+**added after the first live meeting**, because with `backend = "none"` a manual
+upload elsewhere is the only route from a recording to text. It is written on
+demand by `munin mix` (spec §10) as `mixed.opus`, or `mixed.mp3` with
+`--format mp3`, never automatically, and it is deliberately *not* on the session
+record -- no field, no state transition, no history entry. A re-encode of audio
+that already exists is not a capture event, and the `history` list is the audit
+trail for what was captured. Its presence on disk is the whole of its
+bookkeeping. All of it is temporary (spec D25).
 
 **Why `app_source` is on the record.** The four values are not interchangeable.
 A `sink-monitor` track is the whole desktop mix: other applications, other
@@ -767,6 +775,7 @@ def render_transcript(transcript: Transcript, *, gaps: Sequence[tuple[float, flo
 | `toggle` | `[title]` | Start if idle, stop if recording. The keybind target. |
 | `status` | `--json` | Human line, or the §7.2 state view verbatim. |
 | `list` | `--limit N` `--json` | Recent sessions with state and pending reason. |
+| `mix` | `[session]` `--all` `--force` `--format opus\|mp3` `--to DIR` | Sum the two tracks into `mixed.opus` for a manual upload (spec §10, D25). Defaults to the most recent session; reads the spool directly, so it works with the daemon down. |
 | `event` | `call-started\|call-ended` `--pid` `--app` `--app-id` `--handle` `--title` | Feed detection evidence from the plugin. |
 | `doctor` | `--json` | Every check, one line each, per-platform table (§16.5). |
 | `setup` | `--non-interactive`, `--write-default-config` (create the root and `config.toml`, then stop — what `install.sh` step 7 calls) | Create `~/munin/`, write `config.toml`, pick the mic. |

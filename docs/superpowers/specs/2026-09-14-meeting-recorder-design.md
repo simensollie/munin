@@ -89,6 +89,7 @@ second customer name appears zero times in 756,000 words.
 | D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
 | D23 | The `local` backend never imports the model stack; it runs it in a separate interpreter as a subprocess | Munin is stdlib-only and installs against the system Python, which on the reference desktop is 3.14; the pinned pyannote/faster-whisper/torch set needs 3.12. A process boundary keeps the two lifecycles independent, matches how every other external tool is invoked, and costs only interpreter startup, since D22 already reloads the model per job (§8.1) |
 | D24 | The session directory is the only place a transcript is written; no copy goes to the second brain | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
+| D25 | The Plaud export is a stopgap, removed once the local pipeline transcribes | §10 exists because `backend = "none"` leaves no other route from a recording to text. When M4 produces transcripts on this machine, the mix, `munin mix` and the upload folder are deleted rather than maintained, and D11's retention of mixed audio ends with them. What removal costs is the summary (§10) |
 
 ## 5. Architecture
 
@@ -418,7 +419,7 @@ All Munin data lives under `~/munin/` (D18). One named root, so a directory in
 │   ├── session.json      state, title, source, calendar id, segments, checksums
 │   ├── mic.opus          track 1 — you, 24 kbps mono
 │   ├── app.opus          track 2 — everyone else
-│   ├── mixed.mp3         64 kbps, for manual Plaud upload (§10)
+│   ├── mixed.opus        24 kbps, for manual Plaud upload (§10)
 │   ├── transcript.txt    [HH:MM:SS - HH:MM:SS] Speaker: text
 │   ├── transcript.json   word timings, confidences, speaker turns
 │   └── markers.json      anything marked during the meeting
@@ -714,11 +715,45 @@ Plaud's `Summary.md` output (topic grouping, owner-attributed actions, an
 reproduce. Rather than rebuild it, keep the option of getting it from Plaud by
 hand for meetings that warrant it.
 
-Each session therefore retains a **mixed-down copy** alongside the two tracks:
-`ffmpeg -i mic.opus -i app.opus -filter_complex amix=inputs=2 mixed.mp3`. Plaud
-accepts MP3 and OPUS only, 5 hours maximum, so MP3 at 64 kbps mono is the safe
-choice. That is roughly 28 MB per hour, so the full existing archive's worth is
-a few GB.
+**This section has an end date (D25).** It exists because the PoC ships
+`backend = "none"`, so a manual upload is the only route from a recording to
+text at all. Once M4 transcribes locally, this stops being a fallback and starts
+being a second system: a copy of every meeting, in a third party's account, with
+its own naming, its own timestamps and its own retention, kept in step by hand.
+Removal is `src/munin/mixdown.py`, the `munin mix` command and its tests, the
+upload folder, and this section; D11's retention of mixed audio goes with them,
+and existing `mixed.*` files become deletable, since the tracks are the record.
+
+What removal costs is the summary. Nothing in §7 produces topic grouping or
+owner-attributed actions, so either that capability gets built (an LLM pass over
+a finished transcript, a small module that is in no milestone yet) or it is
+consciously given up. Deciding which is what closes this section; deleting the
+export and quietly missing the summaries afterwards is the failure mode.
+
+Each session therefore retains a **mixed-down copy** alongside the two tracks,
+written on demand by `munin mix` rather than automatically, since it regenerates
+from the tracks in seconds.
+
+Plaud accepts MP3 and OPUS only, 5 hours maximum. **The mix is Opus at 24 kbps
+mono**, the bitrate the tracks themselves are captured at, in Opus's `voip`
+mode. Measured on the first real meeting (2026-09-17, 17:07):
+
+| Format | Size | Per hour |
+|---|---|---|
+| MP3, 64 kbps mono | 8.2 MB | ~29 MB |
+| **Opus, 24 kbps mono** | **3.0 MB** | **~10 MB** |
+
+The first draft of this section chose MP3 at 64 kbps as "the safe choice". It is
+the larger *and* the worse file: MP3 is inefficient at low rates, where Opus was
+designed for speech. Appendix A's captured upload API takes
+`file_type: "MP3"|"OPUS"`, so Opus is accepted — but that is an API probe rather
+than a completed upload, so `munin mix --format mp3` stays one flag away in case
+the web importer ever refuses an `.opus`.
+
+The mix is built as `amix=inputs=2:normalize=0` followed by a limiter, not the
+bare `amix=inputs=2` this section first specified: `amix` divides every input by
+the number of inputs, which lands both tracks 6 dB down and buries a headset
+microphone that already sits ~8 dB under the meeting track.
 
 ```
 munin export --since 2026-09-01 --to ~/plaud-upload
@@ -727,7 +762,12 @@ munin mark-uploaded <session>
 ```
 
 Exported filenames carry the session directory name, so a file in the upload
-folder pairs unambiguously with the session that produced it.
+folder pairs unambiguously with the session that produced it — and carries the
+meeting's own date and time, which nothing else does. Observed on the first real
+upload (2026-09-17): the importer stamps `Date created` at the moment of upload,
+whenever you got round to it, and replaces the filename with its own generated
+title only once a summary finishes, never if that fails. Uploading the file
+under its in-session name means every meeting arrives called `mixed`.
 Upload state lives in session metadata, so the outstanding set is always
 queryable. The upload itself is a manual drag into Plaud's web importer; munin
 does not automate it (Appendix A).

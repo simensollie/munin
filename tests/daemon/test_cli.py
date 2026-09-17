@@ -47,7 +47,7 @@ def test_the_parser_covers_every_command_in_the_contract() -> None:
     actions = [a for a in parser._actions if a.dest == "command"]
     assert actions, "there must be a subcommand slot"
     assert set(actions[0].choices) == {
-        "start", "stop", "toggle", "status", "list", "event",
+        "start", "stop", "toggle", "status", "list", "mix", "event",
         "doctor", "setup", "daemon", "worker",
     }
 

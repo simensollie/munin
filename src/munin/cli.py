@@ -24,6 +24,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from pathlib import Path
 from typing import Any
 
 from munin.desktop import prepare_session_environment
@@ -66,7 +67,7 @@ _START_HINT = (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """start, stop, toggle, status, list, event, doctor, setup, daemon, worker."""
+    """start, stop, toggle, status, list, mix, event, doctor, setup, daemon, worker."""
     parser = argparse.ArgumentParser(
         prog="munin",
         description="Munin: record a meeting as two tracks and queue it for transcription.",
@@ -97,6 +98,26 @@ def build_parser() -> argparse.ArgumentParser:
     listing = sub.add_parser("list", help="recent sessions")
     listing.add_argument("--limit", type=int, default=20)
     listing.add_argument("--json", action="store_true")
+
+    mix = sub.add_parser("mix", help="write mixed.mp3 for manual upload (spec 10)")
+    mix.add_argument(
+        "session", nargs="?", default=None, help="session id; default is the most recent"
+    )
+    mix.add_argument("--all", action="store_true", help="every session that has no mix yet")
+    mix.add_argument(
+        "--format",
+        dest="format",
+        choices=("opus", "mp3"),
+        default="opus",
+        help="upload format; opus is a third the size of mp3 at better quality (spec 10)",
+    )
+    mix.add_argument("--force", action="store_true", help="re-encode even if mixed.mp3 exists")
+    mix.add_argument(
+        "--to",
+        default=None,
+        metavar="DIR",
+        help="also copy the mix there, named after the session title",
+    )
 
     event = sub.add_parser("event", help="feed detection evidence from the plugin")
     event.add_argument("event", choices=("call-started", "call-ended"))
@@ -232,6 +253,86 @@ def _cmd_list(args: argparse.Namespace) -> int:
     return EXIT_OK
 
 
+def _megabytes(path: Path) -> str:
+    """Size in MB, one decimal, locale-neutral like every other line here."""
+    return f"{path.stat().st_size / 1_000_000:.1f}"
+
+
+def _cmd_mix(args: argparse.Namespace) -> int:
+    """Sum the two tracks into ``mixed.mp3`` for a manual upload (spec 10).
+
+    Reads the spool directly rather than going through the socket: a mix is a
+    file operation on a finished session, so it must work while ``munin-rec``
+    is down, and a 17-minute meeting holds the daemon's event loop for seconds
+    if it does not.
+    """
+    import shutil as shutil_module
+
+    from munin import mixdown as mixdown_module
+    from munin.spool import Spool
+
+    if args.all and args.session:
+        print("give a session id or --all, not both", file=sys.stderr)
+        return EXIT_USAGE
+
+    spool = Spool(_config())
+    if args.all:
+        sessions = [
+            session
+            for session in spool.iter_sessions()
+            if session.state not in mixdown_module.BUSY_STATES
+        ]
+        if not sessions:
+            print("no sessions to mix")
+            return EXIT_OK
+    elif args.session:
+        found = spool.find(args.session)
+        if found is None:
+            print(f"no session {args.session}", file=sys.stderr)
+            return EXIT_USAGE
+        sessions = [found]
+    else:
+        latest = spool.latest()
+        if latest is None:
+            print("no sessions yet", file=sys.stderr)
+            return EXIT_PRECONDITION
+        sessions = [latest]
+
+    destination = Path(args.to).expanduser() if args.to else None
+    if destination is not None:
+        destination.mkdir(parents=True, exist_ok=True)
+
+    failed = 0
+    for session in sessions:
+        already = (
+            mixdown_module.mixed_path(session, args.format).exists() and not args.force
+        )
+        try:
+            path = mixdown_module.mixdown(
+                session, fmt=args.format, force=bool(args.force)
+            )
+        except mixdown_module.MixdownError as exc:
+            print(str(exc), file=sys.stderr)
+            failed += 1
+            continue
+        line = f"{session.id}  {path}  {_megabytes(path)} MB"
+        if already:
+            line += "  (already mixed)"
+        if destination is not None:
+            copy = destination / mixdown_module.export_filename(
+                session.id, args.format
+            )
+            shutil_module.copy2(path, copy)
+            line += f"  -> {copy}"
+        print(line)
+        if (session.duration_seconds or 0) > mixdown_module.PLAUD_MAX_SECONDS:
+            print(
+                f"{session.id}: longer than Plaud's 5-hour limit; split it before uploading",
+                file=sys.stderr,
+            )
+    return EXIT_ERROR if failed else EXIT_OK
+
+
 def _cmd_event(args: argparse.Namespace) -> int:
     from munin import ipc
 
@@ -315,6 +416,7 @@ _DISPATCH = {
     "toggle": _cmd_toggle,
     "status": _cmd_status,
     "list": _cmd_list,
+    "mix": _cmd_mix,
     "event": _cmd_event,
     "doctor": _cmd_doctor,
     "setup": _cmd_setup,
