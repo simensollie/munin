@@ -80,13 +80,13 @@ munin/
 | M4 | Pipeline on `local` | Language routing, ASR, diarization, attribution tiers 1/3/4, output format | M1 | A captured meeting yields a conformant transcript |
 | M4a | GPU courtesy | `keep_warm = false` path, `defer_when_busy` VRAM check before claiming a session, CUDA OOM treated as an unreachable sink (D22, spec §8.2) | M4 | A session defers while the GPU is committed elsewhere and drains when it frees |
 | M5 | `munin doctor` and `install.sh` | One-command install, wizard, check | M3, M4 | A clean machine reaches a working recording without reading the spec |
-| M6 | Evaluation harness | Held-out Plaud set, hand-corrected references, WER and glossary recall | M4 | Baseline numbers for Plaud vs Munin on the same audio |
+| M6 | Evaluation harness | Held-out Plaud set, hand-corrected references, WER and glossary recall; the §7.6 encoder candidates measured on the same set | M4 | Baseline numbers for Plaud vs Munin on the same audio, and a WER-backed answer on `voip`/DTX capture |
 | M7 | Glossary | User-written `glossary.toml` (D8), two-stage injection, `munin glossary suggest` for corruption discovery over own transcripts | M6 | §13's 100% glossary-term recall met and measured |
 | M8 | Voice register + admin | Profiles, review queue, tier 2 matching, admin surface | M4 | A colleague is named correctly in an ad-hoc call with no invite |
 | M9 | M365 enrichment | Titles, attendees, agenda biasing, series-level opt-out | M4 | Sessions carry real titles; agenda terms reach the decode prompt |
 | M10 | `ssh` backend | Push audio, run remote worker, pull transcript | M4, OQ10 | Mini PC records, desktop transcribes, same text as `local` |
 | M11 | `api` backend | Remote ASR, local diarization split | M4, OQ2, OQ9 | Same fixture through `api` matches `local` |
-| M12 | Plaud export, retention | `export`, `list --not-uploaded`, retention pass | M2, OQ1 | Outstanding upload set queryable; retention runs on a schedule |
+| M12 | Retention, and retiring the Plaud export | Retention pass; `export`/`list --not-uploaded` only if the export outlives M4, which D25 says it does not | M2 | Retention runs on a schedule; the mix, `munin mix` and the upload folder are gone, or there is a written reason they are not |
 | M13 | macOS capture and indicator | ScreenCaptureKit behind `capture/base.py`, menu-bar extra | M1 | MacBook produces the same session layout as Linux |
 | M14 | Windows capture and indicator | WASAPI process loopback, tray icon | M1 | Same session layout again; detection by process name |
 
@@ -163,6 +163,43 @@ Numbers refer to the spec's §14.
    costs more than a rebuild. It lives at
    `~/munin/glossary.toml`; whether it is also version-controlled somewhere
    private needs deciding before M7.
+6. **Capture encoder: `voip` mode and DTX (proposed, gated on M6).** §6.1
+   encodes each track with `libopus -b:a 24k` and nothing else, so the encoder
+   runs in `application=audio` with DTX off and spends full bitrate coding
+   silence. Re-encoding the first real meeting (2026-09-17, 17:07, headset, mic
+   device-muted between turns) through the same `s16 → libopus` pipe:
+
+   | Settings | mic | app | both | vs now |
+   |---|---|---|---|---|
+   | now: `-b:a 24k` | 2.27 MB | 1.90 MB | 4.17 MB | — |
+   | `-b:a 24k -application voip -dtx 1` | 1.19 MB | 1.31 MB | **2.50 MB** | −40% |
+   | `-b:a 16k -application voip -dtx 1 -frame_duration 60` | 0.80 MB | 0.83 MB | **1.63 MB** | −61% |
+
+   At the corpus rate (median 28 min, ~1.4 meetings a day, ~240 hours a year)
+   that is ~3.5 GB a year now against ~2.1 GB, or ~1.4 GB at 16 kbps.
+
+   **Already verified:** DTX is sample-exact. All three variants decode to
+   49,306,892 samples, identical to the original, so the two-track alignment
+   that tier 1 attribution depends on (§7.4) is untouched. The measurement is a
+   re-encode of already-encoded audio, which is the right *shape* (the capture
+   path is `s16` in, Opus out) but not the same as recording a meeting with the
+   new settings.
+
+   **Not verified, and why this is not simply changed:** these are the master
+   copies. `voip` is "favour speech intelligibility" rather than "favour
+   faithfulness to the input", and DTX decides on its own what is silence — a
+   soft onset or a quiet far-end talker is exactly the material both could
+   damage, and exactly the material WER is measured on. So: **M6 first.** Run
+   the held-out set through the current settings and each candidate, and adopt
+   the cheapest one that does not move WER. `-application voip -dtx 1` at the
+   same 24 kbps is the likely answer and the smaller risk; 16 kbps is a real
+   quality question, not a free win, and must not become a default without a
+   number next to it.
+
+   Independent of the outcome, the *derived* file already moved: `munin mix`
+   writes Opus at 24 kbps (3.0 MB for that meeting) instead of the MP3 at
+   64 kbps (8.2 MB) the first draft of §10 chose — smaller and better, with no
+   risk to a master copy.
 
 ## 8. What to do first
 
