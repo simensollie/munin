@@ -78,6 +78,10 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
     assert data["transcribe"]["backend"] == "none"
     assert data["idle"]["method"] == "omarchy-stay-awake"
     assert data["notifications"]["glyph"] == "\U000f0ec2"
+    # Off in the template: the upload folder stages meeting audio for a third
+    # party, so the amendment of 2026-09-18 made it opt-in once, not opt-out.
+    assert data["export"]["enabled"] is False
+    assert data["export"]["format"] == "opus"
     # D24: no second-brain copy, so no section configuring where it goes.
     assert set(data) == {
         "munin",
@@ -87,6 +91,7 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
         "transcribe",
         "idle",
         "notifications",
+        "export",
     }
 
 

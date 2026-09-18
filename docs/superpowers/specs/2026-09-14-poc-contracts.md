@@ -27,6 +27,33 @@ The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
 
+### Amendment 2026-09-18 (auto-export): additive
+
+The mix may now be produced automatically. Section 7.2 said it is written "never
+automatically"; that holds only while the upload folder is refilled by hand, and
+on this machine it was not -- three meetings sat unexported for a day, with
+nothing in `munin list`, `state.json` or a notification to say so, because the
+mix has no bookkeeping to be missing from.
+
+| Surface | Before | After |
+|---|---|---|
+| `config.toml` | no `[export]` section | `[export]` with `enabled`, `directory`, `format` |
+| `munin-work` | claims and processes sessions | also mixes and copies, when `[export] enabled` |
+| systemd | one unit, `munin.service` | a second unit, `munin-work.service` |
+| `munin mix` | `--to` unset, `--format opus` | both fall back to `[export]` |
+
+What did **not** change, and must not: the mix is still absent from the session
+record. No field, no state transition, no history entry, which is what keeps a
+re-encode from looking like a capture event and lets a missed export self-heal
+on the next sweep rather than needing a retry record. The destination file
+existing is still the whole of the bookkeeping.
+
+Additive: `enabled` defaults to `false`, so a machine that does not set it
+behaves exactly as before, and a `config.toml` written before this amendment
+loads unchanged. D11 still calls the Plaud route opt-in -- the opt-in moved from
+"per meeting, by typing `munin mix`" to "once, in the config". All of it goes
+with D25.
+
 ### Amendment 2026-09-16 (D24): breaking
 
 The second-brain copy is removed. Three frozen surfaces changed:
@@ -269,8 +296,9 @@ implementation; nothing else may construct these names.
 **added after the first live meeting**, because with `backend = "none"` a manual
 upload elsewhere is the only route from a recording to text. It is written on
 demand by `munin mix` (spec §10) as `mixed.opus`, or `mixed.mp3` with
-`--format mp3`, never automatically, and it is deliberately *not* on the session
-record -- no field, no state transition, no history entry. A re-encode of audio
+`--format mp3` -- and, since the 2026-09-18 amendment, by `munin-work` on every
+sweep when `[export] enabled` is set. Either way it is deliberately *not* on the
+session record -- no field, no state transition, no history entry. A re-encode of audio
 that already exists is not a capture event, and the `history` list is the audit
 trail for what was captured. Its presence on disk is the whole of its
 bookkeeping. All of it is temporary (spec D25).
@@ -699,6 +727,11 @@ method  = "omarchy-stay-awake"   # §12
 [notifications]
 enabled = true
 glyph   = "2"
+
+[export]                            # §10, added 2026-09-18; goes with D25
+enabled   = false
+directory = "~/plaud-upload"        # absolute or ~-relative, unlike [paths]
+format    = "opus"
 ```
 
 `munin.config.load(path=None) -> Config` returns a frozen dataclass tree with

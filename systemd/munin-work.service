@@ -1,0 +1,44 @@
+# Munin's worker: drains the spool, runs the pipeline, writes the transcript.
+#
+# Separate from munin.service on purpose (D20, three separable processes). The
+# recorder must survive anything the worker does: a worker that dies mid-file,
+# is restarted, or is stopped for an afternoon costs a late transcript, never a
+# recording. That is also why this unit carries no PartOf= -- stopping the
+# graphical session must not abort a transcription that is already running.
+#
+# Not bound to graphical-session.target either: the worker needs no display, no
+# PipeWire and no user input. It is bound to default.target so it survives a
+# shell restart, a logout and a login, and picks up whatever the recorder left
+# in the spool whenever it next runs.
+#
+# In the PoC the configured backend is "none", so every session stops at
+# `pending` with its reason recorded. The worker still earns its unit there:
+# with `[export] enabled` it is what mixes each finished recording and copies it
+# to the upload folder (spec 10). That job disappears with D25; draining the
+# spool does not.
+#
+# Deployed by copy into ~/.config/systemd/user/. Enablement is never committed.
+
+[Unit]
+Description=Munin transcription worker
+After=default.target
+
+[Service]
+Type=simple
+ExecStart=%h/.local/bin/munin-work
+Restart=on-failure
+RestartSec=30
+Environment=XDG_RUNTIME_DIR=%t
+# ffmpeg and, later, the model stack are the point of this process, but they are
+# never urgent: a transcript arrives late, never missing (spec 11). Yielding to
+# everything interactive keeps a mix or a decode from being felt on the desktop
+# during a meeting.
+Nice=10
+IOSchedulingClass=idle
+# The worker holds no audio device and writes each file through a .part rename,
+# so there is nothing to unwind; the default KillMode is right here. A mix
+# killed mid-encode leaves a .part that the next sweep replaces.
+TimeoutStopSec=30
+
+[Install]
+WantedBy=default.target

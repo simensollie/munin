@@ -16,12 +16,15 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import os
+import shutil
 import signal
 import time
 from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
+from munin import mixdown
 from munin.backends import get_backend
 from munin.backends.base import BackendUnavailable
 from munin.config import Config, load as load_config
@@ -90,6 +93,56 @@ class Worker:
                 )
                 count += 1
         return count
+
+    def export(self, session: Session) -> Path | None:
+        """Mix the session and copy it to the upload folder. Returns the copy.
+
+        Off unless ``[export] enabled`` is set (D11 calls the Plaud route
+        opt-in, and this folder is staged for a third party). The mix itself is
+        still on-demand work; what this adds is a standing demand, because a
+        folder nobody refills is a folder that silently goes stale -- the PoC's
+        observed failure mode was three meetings sitting unexported for a day
+        with nothing to say so.
+
+        Idempotent, and deliberately so: a destination file that already exists
+        is the whole of the bookkeeping. Nothing is written to ``session.json``
+        -- no field, no state, no history row -- because a re-encode is not a
+        capture event (contracts section 7.2). That is also what makes a missed
+        export self-heal on the next sweep rather than needing a retry record.
+
+        Never raises. A failure here must not take munin-work down or stop a
+        transcript being written; it logs and the next sweep tries again.
+        """
+        if not self.config.export.enabled:
+            return None
+        if session.state in mixdown.BUSY_STATES:
+            return None
+        fmt = self.config.export.format
+        destination = self.config.export_dir / mixdown.export_filename(session.id, fmt)
+        if destination.exists():
+            return None
+        try:
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            mixed = mixdown.mixdown(session, fmt=fmt)
+            # copy2 for the mtime: the upload folder is read by a human deciding
+            # what still needs uploading, and a file stamped "now" on every
+            # sweep tells them nothing.
+            shutil.copy2(mixed, destination)
+        except (mixdown.MixdownError, OSError) as exc:
+            log.warning("export failed for %s: %s", session.id, exc)
+            return None
+        log.info(
+            "exported session=%s -> %s (%.1f MB)",
+            session.id,
+            destination,
+            destination.stat().st_size / (1024 * 1024),
+        )
+        if (session.duration_seconds or 0) > mixdown.PLAUD_MAX_SECONDS:
+            log.warning(
+                "%s is longer than the 5-hour upload limit; split it before uploading",
+                session.id,
+            )
+        return destination
 
     def claim(self, session: Session) -> None:
         """``captured`` -> ``pending``: the worker has seen it and queued it."""
@@ -190,6 +243,10 @@ class Worker:
         # docstring promises sessions.
         touched: set[str] = set()
         for session in list(self.spool.iter_sessions()):
+            # Before the claim below, so a session captured during this sweep is
+            # exported in the same sweep rather than one interval later.
+            if self.export(session) is not None:
+                touched.add(session.id)
             if session.state == "captured":
                 # A session read in this sweep may have moved since: `munin
                 # start --resume` takes captured/pending back to recording, and
@@ -242,6 +299,41 @@ def _install_stop_handler() -> "list[bool]":
     return flag
 
 
+def configure_logging(config: Config, *, level: int = logging.INFO) -> None:
+    """Structured lines to ``~/munin/munin.log`` and to stderr for systemd.
+
+    Deliberately the same shape as ``daemon.configure_logging``, and writing to
+    the same file: one log is how "the recorder captured it at 12:15, the worker
+    exported it at 12:15" reads as one story. Duplicated rather than imported,
+    because munin-work importing the recorder's module to borrow a formatter
+    would pull the capture and desktop stacks into a process that holds no audio
+    device (contracts section 3, workstream ownership).
+
+    Until this existed the worker logged into a root logger with no handlers, so
+    every ``log.info`` was discarded -- including the export lines added for the
+    2026-09-18 amendment, whose entire purpose is to make a silent failure
+    visible.
+    """
+    root = logging.getLogger("munin")
+    root.setLevel(level)
+    root.handlers.clear()
+    formatter = logging.Formatter(
+        fmt="%(asctime)s %(levelname)s %(name)s %(message)s",
+        datefmt="%Y-%m-%dT%H:%M:%S%z",
+    )
+    stream = logging.StreamHandler()
+    stream.setFormatter(formatter)
+    root.addHandler(stream)
+    try:
+        path = Path(config.home).expanduser() / config.paths.log
+        path.parent.mkdir(parents=True, exist_ok=True)
+        handler = logging.FileHandler(path, encoding="utf-8")
+        handler.setFormatter(formatter)
+        root.addHandler(handler)
+    except OSError as exc:  # pragma: no cover - a read-only home is the user's
+        root.warning("no log file: %s", exc)
+
+
 def main(argv: list[str] | None = None) -> int:
     """``munin-work`` entry point. Also reached as ``munin worker``."""
     parser = argparse.ArgumentParser(prog="munin-work")
@@ -255,6 +347,8 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     config = load_config()
+    configure_logging(config)
+    log.info("munin-work ready pid=%s interval=%.1fs", os.getpid(), args.interval)
     worker = Worker(config)
     worker.recover()  # spec 11: crash recovery happens once, before anything else
 

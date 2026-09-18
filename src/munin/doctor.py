@@ -52,6 +52,7 @@ PLATFORMS: tuple[str, ...] = ("linux", "darwin", "win32")
 
 PLUGIN_ID = "local.munin"
 UNIT_NAME = "munin.service"
+WORKER_UNIT_NAME = "munin-work.service"
 KEYBIND_KEYS = "SUPER + SHIFT + R"
 KEYBIND_MARK = "-- >>> munin (managed by munin install.sh) >>>"
 
@@ -446,22 +447,80 @@ def check_keybind(env: DoctorEnv) -> CheckResult:
     return CheckResult("keybind", "ok", f"{KEYBIND_KEYS} -> munin toggle ({where})")
 
 
-def check_unit(env: DoctorEnv) -> CheckResult:
-    unit = env.path(".config", "systemd", "user", UNIT_NAME)
+def _unit_result(
+    env: DoctorEnv, *, name: str, unit_name: str, missing: Status
+) -> CheckResult:
+    """One user unit's file, enablement and liveness.
+
+    ``missing`` is the caller's call: a recorder with no unit cannot record, but
+    a worker with no unit only means transcripts wait -- unless something is
+    configured that needs it.
+    """
+    unit = env.path(".config", "systemd", "user", unit_name)
     if not unit.is_file():
-        return CheckResult("systemd unit", "fail", f"no {unit}")
-    enabled = _run(env, ["systemctl", "--user", "is-enabled", UNIT_NAME])[1].strip() or "unknown"
-    active = _run(env, ["systemctl", "--user", "is-active", UNIT_NAME])[1].strip() or "unknown"
+        return CheckResult(name, missing, f"no {unit}")
+    enabled = _run(env, ["systemctl", "--user", "is-enabled", unit_name])[1].strip() or "unknown"
+    active = _run(env, ["systemctl", "--user", "is-active", unit_name])[1].strip() or "unknown"
     detail = f"{unit} (is-enabled: {enabled}, is-active: {active})"
     if active == "active":
-        return CheckResult("systemd unit", "ok", detail)
+        return CheckResult(name, "ok", detail)
     if enabled in ("enabled", "enabled-runtime"):
-        return CheckResult("systemd unit", "warn", detail)
+        return CheckResult(name, "warn", detail)
     return CheckResult(
-        "systemd unit",
+        name,
         "warn",
-        detail + f" -- enable it with: systemctl --user enable --now {UNIT_NAME}",
+        detail + f" -- enable it with: systemctl --user enable --now {unit_name}",
     )
+
+
+def check_unit(env: DoctorEnv) -> CheckResult:
+    return _unit_result(
+        env, name="systemd unit", unit_name=UNIT_NAME, missing="fail"
+    )
+
+
+def check_worker_unit(env: DoctorEnv) -> CheckResult:
+    """The worker's unit. Only a failure when something depends on it running.
+
+    With `backend = "none"` and no export, a worker that never runs costs
+    nothing: every session's designed end state is `pending`. With
+    `[export] enabled`, the worker is the only thing that refills the upload
+    folder, so its absence is the whole feature silently not happening -- which
+    is the failure this check exists to name.
+    """
+    result = _unit_result(
+        env,
+        name="worker unit",
+        unit_name=WORKER_UNIT_NAME,
+        missing="fail" if env.config.export.enabled else "warn",
+    )
+    if env.config.export.enabled and result.status != "ok":
+        return CheckResult(
+            result.name,
+            "fail" if result.status == "fail" else "warn",
+            result.detail + " -- [export] is enabled and needs this unit running",
+        )
+    return result
+
+
+def check_export(env: DoctorEnv) -> CheckResult:
+    """The upload folder: configured, present, writable (spec 10, D25)."""
+    export = env.config.export
+    if not export.enabled:
+        return CheckResult(
+            "export", "ok", "[export] disabled; mixes are written by `munin mix` only"
+        )
+    directory = env.config.export_dir
+    detail = f"{directory} (format: {export.format})"
+    if not directory.exists():
+        return CheckResult(
+            "export", "warn", detail + " -- does not exist yet; the worker creates it"
+        )
+    if not directory.is_dir():
+        return CheckResult("export", "fail", detail + " -- exists and is not a directory")
+    if not os.access(directory, os.W_OK):
+        return CheckResult("export", "fail", detail + " -- not writable")
+    return CheckResult("export", "ok", detail)
 
 
 def check_daemon(env: DoctorEnv) -> CheckResult:
@@ -632,12 +691,14 @@ CHECKS: tuple[Check, ...] = (
     Check("plugin on bar", "linux", check_plugin_on_bar),
     Check("keybind", "linux", check_keybind),
     Check("systemd unit", "linux", check_unit),
+    Check("worker unit", "linux", check_worker_unit),
     Check("daemon", "all", check_daemon),
     Check("data root", "all", check_data_root),
     Check("config", "all", check_config),
     Check("disk space", "all", check_disk),
     Check("spool", "all", check_spool),
     Check("transcription", "all", check_backend),
+    Check("export", "all", check_export),
     Check("platform support", "all", check_platform_support),
 )
 
@@ -650,7 +711,7 @@ def run_checks(
     platform: str | None = None,
 ) -> list[CheckResult]:
     """Tools, Python version, data root, config, disk, PipeWire, detection, plugin,
-    unit, backends. Every check returns a line; none raises."""
+    units, backends, export. Every check returns a line; none raises."""
     context = DoctorEnv(
         config=config,
         home=home or Path.home(),

@@ -41,6 +41,10 @@ REPO_DIR="$(dirname "$SCRIPT_PATH")"
 
 PLUGIN_ID="local.munin"
 UNIT_NAME="munin.service"
+# The worker is a second unit, not a second job inside the first: the recorder
+# must survive the worker dying, being restarted, or being stopped for an
+# afternoon (D20).
+WORKER_UNIT_NAME="munin-work.service"
 BAR_ANCHOR="omarchy.tray"
 KEYBIND_KEYS="SUPER + SHIFT + R"
 KEYBIND_DESC="Record meeting"
@@ -59,7 +63,7 @@ Usage: install.sh [--dry-run] [--enable] [--prefix-home <dir>]
        install.sh --uninstall [--dry-run] [--prefix-home <dir>]
 
   --dry-run           print every mutating command instead of running it
-  --enable            also run: systemctl --user enable --now munin.service
+  --enable            also run: systemctl --user enable --now munin.service munin-work.service
   --prefix-home <dir> treat <dir> as the home directory (tests only)
   --uninstall         reverse steps 2-6; leaves the data root in place
 USAGE
@@ -469,18 +473,23 @@ step_keybind() {
 # ---------------------------------------------------------------------------
 
 step_unit() {
-  step 6 "Installing the systemd user unit"
+  step 6 "Installing the systemd user units"
   run mkdir -p "$UNIT_DIR"
-  run cp "$REPO_DIR/systemd/$UNIT_NAME" "$UNIT_DIR/$UNIT_NAME" || fail 6 "could not copy $UNIT_NAME"
-  info "copied $REPO_DIR/systemd/$UNIT_NAME -> $UNIT_DIR/$UNIT_NAME"
+  local unit
+  for unit in "$UNIT_NAME" "$WORKER_UNIT_NAME"; do
+    run cp "$REPO_DIR/systemd/$unit" "$UNIT_DIR/$unit" || fail 6 "could not copy $unit"
+    info "copied $REPO_DIR/systemd/$unit -> $UNIT_DIR/$unit"
+  done
   run systemctl --user daemon-reload || warn "systemctl --user daemon-reload failed"
   if ((DO_ENABLE)); then
-    run systemctl --user enable --now "$UNIT_NAME" || fail 6 "could not enable $UNIT_NAME"
-    info "enabled and started $UNIT_NAME"
+    for unit in "$UNIT_NAME" "$WORKER_UNIT_NAME"; do
+      run systemctl --user enable --now "$unit" || fail 6 "could not enable $unit"
+      info "enabled and started $unit"
+    done
   else
     say ""
-    say "  The unit is installed but NOT enabled. Start it yourself with:"
-    say "      systemctl --user enable --now $UNIT_NAME"
+    say "  The units are installed but NOT enabled. Start them yourself with:"
+    say "      systemctl --user enable --now $UNIT_NAME $WORKER_UNIT_NAME"
   fi
 }
 
@@ -508,15 +517,20 @@ step_data_root() {
 
 uninstall_unit() {
   say ""
-  say "Removing the systemd user unit"
-  if [[ -f $UNIT_DIR/$UNIT_NAME ]]; then
-    run systemctl --user disable --now "$UNIT_NAME" || warn "could not disable $UNIT_NAME"
-    run rm -f "$UNIT_DIR/$UNIT_NAME"
-    info "removed $UNIT_DIR/$UNIT_NAME"
-    run systemctl --user daemon-reload || true
-  else
-    info "no unit at $UNIT_DIR/$UNIT_NAME"
-  fi
+  say "Removing the systemd user units"
+  local unit
+  local removed=0
+  for unit in "$UNIT_NAME" "$WORKER_UNIT_NAME"; do
+    if [[ -f $UNIT_DIR/$unit ]]; then
+      run systemctl --user disable --now "$unit" || warn "could not disable $unit"
+      run rm -f "$UNIT_DIR/$unit"
+      info "removed $UNIT_DIR/$unit"
+      removed=1
+    else
+      info "no unit at $UNIT_DIR/$unit"
+    fi
+  done
+  ((removed)) && run systemctl --user daemon-reload || true
 }
 
 uninstall_keybind() {
@@ -646,7 +660,7 @@ do_install() {
   if ((DO_ENABLE)); then
     :
   else
-    say "  systemctl --user enable --now $UNIT_NAME"
+    say "  systemctl --user enable --now $UNIT_NAME $WORKER_UNIT_NAME"
   fi
 }
 

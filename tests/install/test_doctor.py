@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from munin.config import Config
+from munin.config import Config, ExportConfig
 from munin.doctor import CheckResult, format_table, main, run_checks
 
 if TYPE_CHECKING:  # the fixture comes from tests/install/conftest.py
@@ -103,6 +103,13 @@ def test_each_check_reports_what_it_found(installed: FakeMachine) -> None:
     # D24 removed the second-brain copy, and the check that watched for it.
     assert not any("brain" in name or "copy" in name for name in checks)
 
+    # Installed alongside the recorder's unit, and equally not enabled.
+    assert checks["worker unit"].status == "warn"
+    assert "munin-work.service" in checks["worker unit"].detail
+    # Off in the shipped config, and doctor says which command writes a mix.
+    assert checks["export"].status == "ok"
+    assert "disabled" in checks["export"].detail
+
 
 def test_platform_table_has_one_populated_column(installed: FakeMachine) -> None:
     checks = _run(installed)
@@ -118,6 +125,9 @@ def test_a_bare_machine_fails_loudly(machine: FakeMachine) -> None:
     assert checks["plugin on bar"].status == "fail"
     assert checks["keybind"].status == "fail"
     assert checks["systemd unit"].status == "fail"  # not even copied into place
+    # The worker not running costs a late transcript, not a lost recording, and
+    # nothing here is configured that needs it.
+    assert checks["worker unit"].status == "warn"
     assert checks["data root"].status == "fail"
     assert checks["config"].status == "warn"
 
@@ -237,3 +247,86 @@ def test_a_derived_runtime_dir_is_a_warning_not_a_failure(machine: FakeMachine) 
     checks = _run(machine)
     assert checks["XDG_RUNTIME_DIR"].status == "warn"
     assert "derived" in checks["XDG_RUNTIME_DIR"].detail
+
+
+# -- export (contracts amendment 2026-09-18) --------------------------------
+
+
+def _export_config(machine: FakeMachine, directory: Path) -> Config:
+    return Config(
+        home=machine.data_home,
+        export=ExportConfig(enabled=True, directory=str(directory)),
+    )
+
+
+def test_an_enabled_export_names_the_folder_it_writes_to(
+    installed: FakeMachine, tmp_path: Path
+) -> None:
+    directory = tmp_path / "uploads"
+    directory.mkdir()
+    checks = _by_name(
+        run_checks(
+            _export_config(installed, directory),
+            home=installed.home,
+            env=installed.env,
+            platform="linux",
+        )
+    )
+    assert checks["export"].status == "ok"
+    assert str(directory) in checks["export"].detail
+
+
+def test_an_export_folder_that_is_not_there_yet_is_only_a_warning(
+    installed: FakeMachine, tmp_path: Path
+) -> None:
+    """The worker creates it on the first sweep, so this is not a failure."""
+    checks = _by_name(
+        run_checks(
+            _export_config(installed, tmp_path / "later"),
+            home=installed.home,
+            env=installed.env,
+            platform="linux",
+        )
+    )
+    assert checks["export"].status == "warn"
+    assert "does not exist" in checks["export"].detail
+
+
+def test_an_unwritable_export_folder_fails(
+    installed: FakeMachine, tmp_path: Path
+) -> None:
+    directory = tmp_path / "readonly"
+    directory.mkdir(mode=0o500)
+    try:
+        checks = _by_name(
+            run_checks(
+                _export_config(installed, directory),
+                home=installed.home,
+                env=installed.env,
+                platform="linux",
+            )
+        )
+        assert checks["export"].status == "fail"
+        assert "not writable" in checks["export"].detail
+    finally:
+        directory.chmod(0o700)
+
+
+def test_export_without_a_worker_unit_is_a_failure(
+    machine: FakeMachine, tmp_path: Path
+) -> None:
+    """Enabled, and nothing installed to act on it: the folder would silently
+    never be refilled, which is the failure this feature exists to prevent.
+    """
+    directory = tmp_path / "uploads"
+    directory.mkdir()
+    checks = _by_name(
+        run_checks(
+            _export_config(machine, directory),
+            home=machine.home,
+            env=machine.env,
+            platform="linux",
+        )
+    )
+    assert checks["worker unit"].status == "fail"
+    assert "[export] is enabled" in checks["worker unit"].detail

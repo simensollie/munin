@@ -731,8 +731,30 @@ consciously given up. Deciding which is what closes this section; deleting the
 export and quietly missing the summaries afterwards is the failure mode.
 
 Each session therefore retains a **mixed-down copy** alongside the two tracks,
-written on demand by `munin mix` rather than automatically, since it regenerates
-from the tracks in seconds.
+written by `munin mix`, or by `munin-work` on every sweep when `[export]` is
+enabled:
+
+```toml
+[export]
+enabled   = false            # opt in once, instead of per meeting
+directory = "~/plaud-upload"
+format    = "opus"
+```
+
+The first version of this section made the mix strictly on-demand, on the
+grounds that it regenerates from the tracks in seconds and a session nobody
+uploads never needs one. That is still true of the *file*; it was wrong about
+the *folder*. A manual step with no reminder is a step that stops happening:
+three meetings sat unexported for a day on the reference machine, and nothing
+could have said so, because the mix is deliberately absent from the session
+record (contracts §7.2) and there is therefore no "not exported yet" to query.
+Automating the copy is the cheaper of the two fixes; the other is upload state
+in session metadata, which this section already asks for below and which costs
+a `session.json` field on a surface D25 deletes.
+
+`enabled = false` is the shipped default, since the folder stages meeting audio
+for a third party under its retention rather than yours (§12), and D11 calls
+this route opt-in. Enabling it moves the opt-in from per meeting to once.
 
 Plaud accepts MP3 and OPUS only, 5 hours maximum. **The mix is Opus at 24 kbps
 mono**, the bitrate the tracks themselves are captured at, in Opus's `voip`
