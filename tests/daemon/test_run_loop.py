@@ -21,13 +21,27 @@ from .conftest import Harness
 
 
 def _run_in_thread(harness: Harness) -> threading.Thread:
+    """Start the daemon and wait until it actually answers.
+
+    The socket *file* appears at ``bind()``, one call before ``listen()``, and a
+    Unix socket that is bound but not listening refuses connections outright --
+    no timeout, no retry, ``ECONNREFUSED`` on the spot. Waiting for the path
+    alone therefore raced the daemon's own startup and failed under load, which
+    is a flake in this harness and never in the daemon. Wait for an answered
+    ping instead: that is the condition the tests below actually depend on.
+    """
     thread = threading.Thread(target=harness.daemon.run, daemon=True)
     thread.start()
     for _ in range(200):
         if harness.daemon.socket_path.exists():
-            return thread
+            try:
+                ipc.call("ping", harness.daemon.socket_path, timeout=5)
+            except ipc.DaemonUnreachable:
+                pass
+            else:
+                return thread
         threading.Event().wait(0.01)
-    raise AssertionError("the daemon never bound its socket")
+    raise AssertionError("the daemon never answered on its socket")
 
 
 def test_the_daemon_serves_a_whole_recording_over_the_socket(harness: Harness) -> None:

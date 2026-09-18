@@ -9,6 +9,7 @@ reply to an exit code and one short line of output.
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any
 
 import pytest
@@ -243,7 +244,11 @@ def test_setup_still_runs_when_the_config_will_not_parse(
     assert "is not valid TOML" in out.err
 
 
-def test_worker_delegates_and_survives_a_stub(capsys) -> None:
+def test_worker_delegates_and_survives_a_stub(munin_home: Path, capsys) -> None:
+    """``munin_home`` is not decoration: without it this ran a real sweep over
+    the developer's own ``~/munin``, claiming their captured sessions and (once
+    the worker learned to log) appending to their log file.
+    """
     code = cli.main(["worker", "--once"])
     assert code in (cli.EXIT_OK, cli.EXIT_ERROR)
     if code == cli.EXIT_ERROR:
