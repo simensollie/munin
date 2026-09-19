@@ -415,7 +415,7 @@ def check_plugin_on_bar(env: DoctorEnv) -> CheckResult:
     return CheckResult(
         "plugin on bar",
         "fail",
-        f"{PLUGIN_ID} is not in bar.layout (omarchy bar put {PLUGIN_ID} --before omarchy.tray)",
+        f"{PLUGIN_ID} is not in bar.layout (omarchy bar put {PLUGIN_ID} --section center --after omarchy.weather)",
     )
 
 

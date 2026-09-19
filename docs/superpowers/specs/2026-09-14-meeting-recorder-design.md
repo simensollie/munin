@@ -635,7 +635,12 @@ Three findings shape this:
 a recording, so the plugin detects, prompts and renders while `munin-rec`
 captures.
 
-Placement: `omarchy bar put local.munin --before omarchy.tray`, which writes
+Placement: the centre section, immediately right of the weather
+(`omarchy bar put local.munin --section center --after omarchy.weather`), because
+the widget is a state indicator that has to be noticed mid-meeting rather than
+looked for, and it is hidden while idle (9.2) so the slot costs nothing. An
+anchor id rather than an index, since an index means a different place on every
+bar. This writes
 `shell.json` and hot-reloads. Note that `shell.json` is deployed as a copy, never
 a symlink, because `omarchy-shell-config` writes with an atomic rename.
 
@@ -937,7 +942,7 @@ git clone <repo> ~/dev/munin && ~/dev/munin/install.sh
 | 1 | Check `ffmpeg`, `pipewire`, Python 3.12+, `uv`; offer `omarchy pkg add` for anything missing | nothing yet |
 | 2 | Install CLI, daemon and worker | `~/.local/bin/munin*` |
 | 3 | Install and validate the shell plugin | `~/.config/omarchy/plugins/local.munin/` |
-| 4 | Put the widget in the bar | `omarchy bar put local.munin --before omarchy.tray` |
+| 4 | Put the widget in the bar | `omarchy bar put local.munin --section center --after omarchy.weather` |
 | 5 | Bind the key, unbinding first if Omarchy owns it | `~/.config/hypr/bindings.lua`, backed up first |
 | 6 | Copy the systemd user unit, print the enable command rather than running it | `~/.config/systemd/user/munin.service` |
 | 7 | Create the data root and a default config | `~/munin/`, `~/munin/config.toml` |

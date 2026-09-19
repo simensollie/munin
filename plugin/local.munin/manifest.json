@@ -16,6 +16,6 @@
     "description": "Recording state, elapsed time and the session queue.",
     "category": "Audio",
     "allowMultiple": false,
-    "defaultSection": "right"
+    "defaultSection": "center"
   }
 }

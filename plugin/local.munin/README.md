@@ -147,7 +147,7 @@ cp -r plugin/local.munin ~/.config/omarchy/plugins/local.munin
 omarchy plugin validate ~/.config/omarchy/plugins/local.munin
 omarchy-shell shell rescanPlugins          # make the live shell see it
 omarchy plugin enable local.munin          # enabling is a live IPC call
-omarchy bar put local.munin --before omarchy.tray
+omarchy bar put local.munin --section center --after omarchy.weather
 ```
 
 Copy, never symlink: `omarchy plugin validate` rejects a plugin folder that

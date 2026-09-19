@@ -45,7 +45,20 @@ UNIT_NAME="munin.service"
 # must survive the worker dying, being restarted, or being stopped for an
 # afternoon (D20).
 WORKER_UNIT_NAME="munin-work.service"
-BAR_ANCHOR="omarchy.tray"
+# The widget lives in the centre section, immediately right of the weather. It
+# is a state indicator that has to be noticed mid-meeting without being looked
+# for, and the right section is a row of tray icons that is scanned, not
+# glanced at. It is hidden while idle (spec 9.2), so the slot costs nothing
+# when nothing is recording.
+#
+# The anchor is a widget id rather than an index, because an index means a
+# different place on every bar. The cost is that PluginRegistry.barTarget
+# *fails* the enable when the anchor is not on the bar (a user who removed the
+# weather), so the placement falls back to the section alone -- which the
+# registry resolves to that same spot, since omarchy.weather is the centre
+# section's own default anchor, and to the end of the section without it.
+BAR_SECTION="center"
+BAR_ANCHOR="omarchy.weather"
 KEYBIND_KEYS="SUPER + SHIFT + R"
 KEYBIND_DESC="Record meeting"
 KEYBIND_CMD="munin toggle"
@@ -306,7 +319,7 @@ shell_step_deferred() {
   warn "$1"
   warn "the Omarchy shell is not reachable; the plugin is installed but not enabled"
   say "  Once the shell is running, finish this step yourself with:"
-  say "      omarchy plugin enable $PLUGIN_ID --before $BAR_ANCHOR"
+  say "      omarchy plugin enable $PLUGIN_ID --section $BAR_SECTION --after $BAR_ANCHOR"
   return 0
 }
 
@@ -351,17 +364,25 @@ step_plugin_enable() {
   fi
   # The placement has to ride along with `enable`. Enabling a plugin that
   # declares a bar-widget already puts it on the bar, at the registry's default
-  # anchor for its section -- which for "right" is *after* omarchy.tray -- and a
-  # `bar put` afterwards is a no-op on a widget that is already placed. So this
-  # call is the only moment the position can be chosen at all.
+  # anchor for the manifest's section, and a `bar put` afterwards is a no-op on
+  # a widget that is already placed. So this call is the only moment the
+  # position can be chosen at all. A user who moves it later keeps that move:
+  # the branch below never re-places a widget that is already in the layout.
   if bar_has_plugin; then
     info "$PLUGIN_ID is already on the bar; left where it is"
     run omarchy plugin enable "$PLUGIN_ID" ||
       { shell_step_deferred "omarchy plugin enable $PLUGIN_ID failed"; return 0; }
   else
-    run omarchy plugin enable "$PLUGIN_ID" --before "$BAR_ANCHOR" ||
-      { shell_step_deferred "omarchy plugin enable $PLUGIN_ID --before $BAR_ANCHOR failed"; return 0; }
-    info "placed $PLUGIN_ID on the bar before $BAR_ANCHOR"
+    if run omarchy plugin enable "$PLUGIN_ID" --section "$BAR_SECTION" --after "$BAR_ANCHOR"; then
+      info "placed $PLUGIN_ID on the bar in $BAR_SECTION, after $BAR_ANCHOR"
+    elif run omarchy plugin enable "$PLUGIN_ID" --section "$BAR_SECTION"; then
+      # No weather widget to sit beside. The section is still right, so say
+      # where it actually landed rather than claiming the anchor.
+      warn "$BAR_ANCHOR is not on the bar; placed $PLUGIN_ID in $BAR_SECTION at the section default"
+    else
+      shell_step_deferred "omarchy plugin enable $PLUGIN_ID --section $BAR_SECTION --after $BAR_ANCHOR failed"
+      return 0
+    fi
   fi
   info "enabled $PLUGIN_ID"
   (( DRY_RUN )) || restore_bar_settings "$before_transparent" "$before_position"

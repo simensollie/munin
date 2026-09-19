@@ -62,7 +62,10 @@ def test_dry_run_changes_nothing(machine: FakeMachine) -> None:
     assert "would run:" in proc.stdout
     assert f"would run: python3 -m venv {machine.venv}" in proc.stdout
     assert "would run: cp -R" in proc.stdout
-    assert "would run: omarchy plugin enable local.munin --before omarchy.tray" in proc.stdout
+    assert (
+        "would run: omarchy plugin enable local.munin --section center --after omarchy.weather"
+        in proc.stdout
+    )
     assert f"would append to: {machine.bindings_link}" in proc.stdout
     assert "would run: systemctl --user daemon-reload" in proc.stdout
 
@@ -101,10 +104,13 @@ def test_install_performs_every_step(machine: FakeMachine) -> None:
     # 4: enabled and placed on the bar. The placement rides along with `enable`,
     # which already places a bar-widget: a later `bar put` would be too late.
     assert machine.called("omarchy-shell shell rescanPlugins")
-    assert machine.called("omarchy plugin enable local.munin --before omarchy.tray")
+    assert machine.called(
+        "omarchy plugin enable local.munin --section center --after omarchy.weather"
+    )
     layout = json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["layout"]
-    right = [w["id"] for w in layout["right"]]
-    assert right.index("local.munin") < right.index("omarchy.tray")
+    center = [w["id"] for w in layout["center"]]
+    assert center.index("local.munin") == center.index("omarchy.weather") + 1
+    assert "local.munin" not in [w["id"] for w in layout["right"]]
 
     # 5: keybind, backed up outside the dotfiles repo, appended through the
     # symlink, and said out loud
@@ -159,6 +165,27 @@ def test_unbind_is_emitted_when_omarchy_owns_the_key(machine: FakeMachine, tmp_p
     assert text.index('hl.unbind("SUPER + SHIFT + R")') < text.index(KEYBIND_LINE)
 
 
+def test_a_bar_without_the_anchor_still_gets_the_widget(machine: FakeMachine) -> None:
+    """A user who removed the weather widget must not end up with no widget at all.
+
+    PluginRegistry fails the enable outright when the anchor is not on the bar
+    ("could not find target widget"), so the installer retries with the section
+    alone rather than leaving the plugin enabled but unplaced.
+    """
+    data = json.loads(machine.shell_json.read_text(encoding="utf-8"))
+    data["bar"]["layout"]["center"] = [
+        w for w in data["bar"]["layout"]["center"] if w["id"] != "omarchy.weather"
+    ]
+    machine.shell_json.write_text(json.dumps(data), encoding="utf-8")
+
+    proc = machine.run()
+
+    assert "is not on the bar" in proc.stderr
+    assert machine.called("omarchy plugin enable local.munin --section center")
+    layout = json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["layout"]
+    assert "local.munin" in [w["id"] for w in layout["center"]]
+
+
 def test_install_is_idempotent(machine: FakeMachine) -> None:
     machine.run()
     config = machine.data_home / "config.toml"
@@ -179,10 +206,10 @@ def test_install_is_idempotent(machine: FakeMachine) -> None:
     assert not machine.called("munin setup")
     # Already on the bar: left where it is, and never asked for a second place.
     assert machine.called("omarchy plugin enable local.munin")
-    assert not machine.called("omarchy plugin enable local.munin --before")
+    assert not machine.called("omarchy plugin enable local.munin --section")
     assert "left where it is" in second.stdout
     layout = json.loads(machine.shell_json.read_text(encoding="utf-8"))["bar"]["layout"]
-    assert [w["id"] for w in layout["right"]].count("local.munin") == 1
+    assert [w["id"] for w in layout["center"]].count("local.munin") == 1
 
 
 def test_existing_foreign_binding_is_left_alone(machine: FakeMachine) -> None:
@@ -286,7 +313,10 @@ def test_an_unreachable_shell_does_not_strand_the_install(machine: FakeMachine) 
     proc = machine.run()
 
     assert "not reachable" in proc.stderr
-    assert "omarchy plugin enable local.munin --before omarchy.tray" in proc.stdout
+    assert (
+        "omarchy plugin enable local.munin --section center --after omarchy.weather"
+        in proc.stdout
+    )
 
     # Steps 5-7 still ran: they are filesystem work, not shell work.
     assert MARK_BEGIN in machine.bindings_target.read_text(encoding="utf-8")
@@ -331,7 +361,7 @@ def test_enable_may_not_change_the_bars_transparency(machine: FakeMachine) -> No
     assert machine.called("omarchy bar transparent false")
     after = json.loads(machine.shell_json.read_text(encoding="utf-8"))
     assert after["bar"]["transparent"] is False
-    assert [w["id"] for w in after["bar"]["layout"]["right"]][:2] == ["local.munin", "omarchy.tray"]
+    assert [w["id"] for w in after["bar"]["layout"]["center"]][-1] == "local.munin"
 
 
 def test_a_bar_that_was_already_transparent_is_left_alone(machine: FakeMachine) -> None:
