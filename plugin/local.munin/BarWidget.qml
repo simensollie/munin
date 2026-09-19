@@ -10,8 +10,8 @@
 // one is a pure function of the daemon's state.json -- see Model.js. Nothing
 // here decides anything:
 //
-//   idle          hidden
-//   detected      dim microphone glyph and the app label
+//   idle          static waveform
+//   detected      dim waveform and the app label
 //   recording     pulsing red dot and elapsed time
 //   ending        the same red dot held steady, still counting
 //   transcribing  a turning glyph and the queue depth
@@ -264,7 +264,7 @@ Panel {
                 RotationAnimation {
                     target: glyphText
                     property: "rotation"
-                    running: glyphText.visible && Model.barSpins(root.barState)
+                    running: glyphText.visible && Model.barSpinsFor(root.status, root.nowMs)
                     loops: Animation.Infinite
                     from: 0
                     to: 360
@@ -347,9 +347,9 @@ Panel {
                         foreground: root.foreground
                         fontFamily: root.fontFamily
 
-                        // Munin's identity glyph: U+F0EC2, the one
-                        // bar/indicators/ScreenRecording.qml uses for its own
-                        // recording indicator.
+                        // Munin's identity glyph: the waveform (U+F147D),
+                        // the same mark the bar and the session rows use, so
+                        // the panel hero reads as the same thing enlarged.
                         iconComponent: Component {
                             Text {
                                 textFormat: Text.PlainText
@@ -484,7 +484,7 @@ Panel {
 
                         Button {
                             text: Model.primaryActionFor(root.status, root.nowMs).label
-                            iconText: root.counting ? Model.GLYPH : ""
+                            iconText: root.counting ? Model.GLYPH_STOP : ""
                             bordered: true
                             foreground: root.counting ? root.urgent : root.foreground
                             fontFamily: root.fontFamily
@@ -617,7 +617,9 @@ Panel {
         case "ending": return "Meeting seems over. Recording stops soon.";
         case "captured":
         case "transcribing":
-            return root.status.queue_depth + " in the queue, audio safe on disk.";
+            return Model.deferred(root.status, root.nowMs)
+                ? "Audio saved. Transcription is not configured."
+                : root.status.queue_depth + " in the queue, audio safe on disk.";
         case "done": return "Transcript ready.";
         case "failed": return "Failed. The audio is kept.";
         default:

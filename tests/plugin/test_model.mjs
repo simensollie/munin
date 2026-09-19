@@ -130,12 +130,12 @@ test("formatDuration reads as words", () => {
 // ----------------------------------------------------------------- bar
 
 test("the seven states of spec 9.2 each render one way", () => {
-  assert.equal(M.visible("idle"), false);
+  assert.equal(M.visible("idle"), true);
   for (const s of ["detected", "recording", "ending", "captured", "transcribing", "done", "failed"]) {
     assert.equal(M.visible(s), true, s);
   }
 
-  assert.equal(M.barGlyph("detected"), M.GLYPH_DETECTED);
+  assert.equal(M.barGlyph("detected"), M.GLYPH);
   assert.equal(M.barGlyph("recording"), "");
   assert.equal(M.barGlyph("ending"), "");
   assert.equal(M.barGlyph("transcribing"), M.GLYPH_WORKING);
@@ -162,8 +162,8 @@ test("the seven states of spec 9.2 each render one way", () => {
   assert.equal(M.barTone("transcribing"), "foreground");
 });
 
-test("the identity glyph is U+F0EC2, the ScreenRecording.qml precedent", () => {
-  assert.equal(M.GLYPH.codePointAt(0), 0xf0ec2);
+test("the identity glyph is the waveform U+F147D", () => {
+  assert.equal(M.GLYPH.codePointAt(0), 0xf147d);
   assert.equal([...M.GLYPH].length, 1);
 });
 
@@ -521,8 +521,8 @@ test("Model.js exports every function the QML calls", () => {
 test("a pending session is waiting, not failed", () => {
   const list = M.parseSessions('{"sessions": [{"id": "a", "state": "pending", "pending_reason": "no transcription backend configured"}]}');
   assert.equal(list[0].state, "pending");
-  assert.equal(M.sessionGlyph("pending"), M.GLYPH_WAITING);
-  assert.equal(M.sessionGlyph("captured"), M.GLYPH_WAITING);
+  assert.equal(M.sessionGlyph("pending"), M.GLYPH);
+  assert.equal(M.sessionGlyph("captured"), M.GLYPH);
   assert.equal(M.sessionGlyph("failed"), M.GLYPH_FAILED);
   // A state the plugin has never heard of is still flagged, never hidden.
   const odd = M.parseSessions('{"sessions": [{"id": "b", "state": "exploded"}]}');
@@ -530,11 +530,11 @@ test("a pending session is waiting, not failed", () => {
   assert.equal(M.sessionGlyph("unknown"), M.GLYPH_FAILED);
 });
 
-test("with no backend the bar shows a quiet hourglass and no count", () => {
+test("with no backend the bar shows a static waveform and no count", () => {
   const view = M.parseState(stateJson({ state: "captured", queue_depth: 3,
     transcription_backend: "none", updated_at: "2026-09-14T13:25:08+02:00" }));
   assert.equal(M.deferred(view, T0), true);
-  assert.equal(M.barGlyphFor(view, T0), M.GLYPH_WAITING);
+  assert.equal(M.barGlyphFor(view, T0), M.GLYPH);
   assert.equal(M.barToneFor(view, T0), "dim");
   assert.equal(M.barLabel(view, T0), "");
   assert.equal(M.barSpins(M.effectiveState(view, T0)), false);
@@ -606,4 +606,24 @@ test("the live states are untouched by the resume logic", () => {
   const ending = M.parseState(stateJson({ state: "ending", resume_window_seconds: 600,
     updated_at: "2026-09-14T13:25:08+02:00" }));
   assert.deepEqual(M.secondaryActionFor(ending, T0), M.secondaryAction("ending"));
+});
+
+// Idle remains an entry point after a transient completion indicator expires.
+test("idle and saved audio use a static waveform; only real transcription spins", () => {
+  assert.equal(M.barGlyph("idle"), M.GLYPH);
+  assert.equal(M.barGlyph("captured"), M.GLYPH);
+  for (const state of ["idle", "captured", "transcribing"]) {
+    const view = M.parseState(stateJson({state, transcription_backend: "none",
+      updated_at: "2026-09-14T13:25:08+02:00"}));
+    assert.equal(M.barGlyphFor(view, T0), M.GLYPH);
+    assert.equal(M.barSpinsFor(view, T0), false);
+  }
+  const working = M.parseState(stateJson({state: "transcribing", transcription_backend: "local",
+    updated_at: "2026-09-14T13:25:08+02:00"}));
+  assert.equal(M.barSpinsFor(working, T0), true);
+  const done = M.parseState(stateJson({state: "done", since: "2026-09-14T13:25:08+02:00",
+    updated_at: "2026-09-14T13:25:08+02:00"}));
+  const later = T0 + (M.DONE_VISIBLE_SECONDS + 1) * 1000;
+  assert.equal(M.barGlyphFor(done, later), M.GLYPH);
+  assert.equal(M.visible(M.effectiveState(done, later)), true);
 });
