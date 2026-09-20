@@ -167,6 +167,28 @@ test("the identity glyph is the level bars U+F0EA2, legible at 13 px", () => {
   assert.equal([...M.GLYPH].length, 1);
 });
 
+// Each of these was chosen for the bar's 13 px icon font, where a hairline
+// stroke vanishes. Pinning the code points keeps a later "nicer" glyph from
+// quietly undoing that: md-check and md-alert_outline are the thin cuts this
+// replaced, and md-loading is the arc that all but disappeared while spinning.
+test("every bar glyph is one code point, and none is a hairline cut", () => {
+  const marks = {
+    GLYPH: 0xf0ea2,            // md-equalizer
+    GLYPH_WORKING: 0xf0450,    // md-refresh, not md-loading 0xf0772
+    GLYPH_DONE: 0xf0e1e,       // md-check_bold, not md-check 0xf012c
+    GLYPH_FAILED: 0xf0026,     // md-alert, not md-alert_outline 0xf002a
+    GLYPH_STOP: 0xf04db,       // md-stop
+    GLYPH_FOLDER: 0xf024b,     // md-folder
+  };
+  const seen = new Set();
+  for (const [name, cp] of Object.entries(marks)) {
+    assert.equal([...M[name]].length, 1, name);
+    assert.equal(M[name].codePointAt(0), cp, name);
+    assert.equal(seen.has(cp), false, name + " is not distinct");
+    seen.add(cp);
+  }
+});
+
 test("barLabel says the right thing in each state", () => {
   // The heartbeat keeps pace with the clock, or the view would read as stale.
   const rec = M.parseState(

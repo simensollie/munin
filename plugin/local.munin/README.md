@@ -81,7 +81,7 @@ field of the `event` reply is for.
 | `recording` | pulsing red dot and `HH:MM:SS` |
 | `ending` | the same red dot held steady, still counting |
 | `captured` | static level bars and the queue depth (no count when transcription is disabled) — the audio is safe and nothing is running |
-| `transcribing` | a turning loading glyph and the queue depth |
+| `transcribing` | a turning refresh glyph and the queue depth |
 | `done` | a tick and "Transcript ready", for 30 s |
 | `failed` | an exclamation and "Retry", until it is acknowledged |
 
@@ -96,7 +96,13 @@ panel hero and saved-session rows. Bars rather than a waveform because the bar
 draws its icons at 13 px, where a waveform collapses into its own centre line;
 three solid bars still read. Active recording uses a pulsing dot; ending uses a
 steady dot. The Stop action uses a square. Completed transcripts show a check
-for 30 seconds before returning to the bars. Transcription disabled means saved
+for 30 seconds before returning to the bars. The spinner, the check and the
+alert are all weighted cuts (`󰑐`, `󰸞`, `󰀦`) for the same reason the
+identity mark is: the thin ones are gone at 13 px, and the spinner is a closed
+circular arrow because an arc that is mostly whitespace reads as nothing once
+it turns. Only the spinner is transformed, so it alone renders with
+`Text.QtRendering`; Qt hints a native glyph for a pixel grid a rotation takes
+it off. Transcription disabled means saved
 audio, with static bars and explanatory panel text, never a spinner.
 
 ## Detection

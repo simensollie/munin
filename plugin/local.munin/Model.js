@@ -39,10 +39,14 @@ var SESSION_STATES = STATES.concat(["pending"]);
 // collapses into its own centre line and its peaks are one pixel wide, which
 // is unreadable at a glance. Three solid bars survive the size.
 var GLYPH = "󰺢";             // U+F0EA2, Material Design equalizer
-var GLYPH_WORKING = "󰝲";     // loading, animated only during transcription
-var GLYPH_STOP = "󰓛";        // stop square, for the Stop action
-var GLYPH_DONE = "󰄬";         // check
-var GLYPH_FAILED = "󰀪";       // alert
+// The rest are picked for the same 13 px: a hairline stroke disappears at
+// bar size, so each of these is the weighted cut of its shape. The spinner
+// is a closed circular arrow rather than an arc, because a shape that is
+// almost all whitespace reads as nothing at all once it is turning.
+var GLYPH_WORKING = "󰑐";     // U+F0450, refresh: spun while transcribing
+var GLYPH_STOP = "󰓛";        // U+F04DB, stop square, for the Stop action
+var GLYPH_DONE = "󰸞";        // U+F0E1E, check, bold cut
+var GLYPH_FAILED = "󰀦";      // U+F0026, alert, solid triangle
 var GLYPH_FOLDER = "󰉋";       // folder, for the "open recordings" row
 
 // `done` is shown for 30 s after the last transcript lands, then the widget

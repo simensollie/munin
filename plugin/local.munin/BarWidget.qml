@@ -66,6 +66,7 @@ Panel {
     readonly property bool counting: barState === "recording" || barState === "ending"
     readonly property string barLabel: Model.barLabel(status, nowMs)
     readonly property string barGlyphText: Model.barGlyphFor(status, nowMs)
+    readonly property bool spinning: Model.barSpinsFor(status, nowMs)
 
     // `Panel` is not `BarWidget`, so the bar geometry it lifts off the host
     // has to be lifted here instead.
@@ -259,12 +260,17 @@ Panel {
                 color: root.barTint
                 font.family: root.fontFamily
                 font.pixelSize: Style.bar.iconFont
-                renderType: Text.NativeRendering
+                // Native rendering is the house default and the sharper of the
+                // two at rest, but Qt's own advice is not to transform it: a
+                // rotated native glyph is hinted for a grid it no longer sits
+                // on. The spinner is the one transformed glyph here, so it
+                // renders the other way for as long as it turns.
+                renderType: root.spinning ? Text.QtRendering : Text.NativeRendering
 
                 RotationAnimation {
                     target: glyphText
                     property: "rotation"
-                    running: glyphText.visible && Model.barSpinsFor(root.status, root.nowMs)
+                    running: glyphText.visible && root.spinning
                     loops: Animation.Infinite
                     from: 0
                     to: 360

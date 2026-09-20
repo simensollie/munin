@@ -654,7 +654,7 @@ States rendered, one at a time:
 | recording | red dot, pulsing, elapsed | Capturing |
 | ending | red dot, steady, elapsed | Streams gone, grace period running |
 | captured | static level bars | Audio saved; queue count only when transcription is configured |
-| transcribing | animated loading glyph with queue depth | Worker running; level bars instead when transcription is disabled |
+| transcribing | turning refresh glyph with queue depth | Worker running; level bars instead when transcription is disabled |
 | done | ✓ for 30 s, then level bars | Transcript landed |
 | failed | ! until acknowledged | Audio retained; a failure that hides itself is a lost meeting |
 ### 9.3 Keybinding
