@@ -10,8 +10,8 @@
 // one is a pure function of the daemon's state.json -- see Model.js. Nothing
 // here decides anything:
 //
-//   idle          static waveform
-//   detected      dim waveform and the app label
+//   idle          static level bars
+//   detected      dim level bars and the app label
 //   recording     pulsing red dot and elapsed time
 //   ending        the same red dot held steady, still counting
 //   transcribing  a turning glyph and the queue depth
@@ -347,7 +347,7 @@ Panel {
                         foreground: root.foreground
                         fontFamily: root.fontFamily
 
-                        // Munin's identity glyph: the waveform (U+F147D),
+                        // Munin's identity glyph: the level bars (U+F0EA2),
                         // the same mark the bar and the session rows use, so
                         // the panel hero reads as the same thing enlarged.
                         iconComponent: Component {

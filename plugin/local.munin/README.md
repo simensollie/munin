@@ -76,11 +76,11 @@ field of the `event` reply is for.
 
 | State | Bar shows |
 |---|---|
-| `idle` | static waveform, opening the recordings panel |
-| `detected` | dim waveform and the app label |
+| `idle` | static level bars, opening the recordings panel |
+| `detected` | dim level bars and the app label |
 | `recording` | pulsing red dot and `HH:MM:SS` |
 | `ending` | the same red dot held steady, still counting |
-| `captured` | a static waveform and the queue depth (no count when transcription is disabled) — the audio is safe and nothing is running |
+| `captured` | static level bars and the queue depth (no count when transcription is disabled) — the audio is safe and nothing is running |
 | `transcribing` | a turning loading glyph and the queue depth |
 | `done` | a tick and "Transcript ready", for 30 s |
 | `failed` | an exclamation and "Retry", until it is acknowledged |
@@ -91,11 +91,13 @@ is named in `Model.js`: a state maps to a *tone* (`urgent`, `foreground`,
 `dim`) and `BarWidget.qml` resolves that against the theme, so a theme change
 needs no code.
 
-The waveform (U+F147D) is Munin's persistent identity in the bar, panel hero
-and saved-session rows. Active recording uses a pulsing dot; ending uses a
+The level bars (`󰺢`, U+F0EA2) are Munin's persistent identity in the bar,
+panel hero and saved-session rows. Bars rather than a waveform because the bar
+draws its icons at 13 px, where a waveform collapses into its own centre line;
+three solid bars still read. Active recording uses a pulsing dot; ending uses a
 steady dot. The Stop action uses a square. Completed transcripts show a check
-for 30 seconds before returning to the waveform. Transcription disabled means
-saved audio, with a static waveform and explanatory panel text, never a spinner.
+for 30 seconds before returning to the bars. Transcription disabled means saved
+audio, with static bars and explanatory panel text, never a spinner.
 
 ## Detection
 

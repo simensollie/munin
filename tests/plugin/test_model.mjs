@@ -162,8 +162,8 @@ test("the seven states of spec 9.2 each render one way", () => {
   assert.equal(M.barTone("transcribing"), "foreground");
 });
 
-test("the identity glyph is the waveform U+F147D", () => {
-  assert.equal(M.GLYPH.codePointAt(0), 0xf147d);
+test("the identity glyph is the level bars U+F0EA2, legible at 13 px", () => {
+  assert.equal(M.GLYPH.codePointAt(0), 0xf0ea2);
   assert.equal([...M.GLYPH].length, 1);
 });
 
@@ -530,7 +530,7 @@ test("a pending session is waiting, not failed", () => {
   assert.equal(M.sessionGlyph("unknown"), M.GLYPH_FAILED);
 });
 
-test("with no backend the bar shows a static waveform and no count", () => {
+test("with no backend the bar shows static level bars and no count", () => {
   const view = M.parseState(stateJson({ state: "captured", queue_depth: 3,
     transcription_backend: "none", updated_at: "2026-09-14T13:25:08+02:00" }));
   assert.equal(M.deferred(view, T0), true);
@@ -609,7 +609,7 @@ test("the live states are untouched by the resume logic", () => {
 });
 
 // Idle remains an entry point after a transient completion indicator expires.
-test("idle and saved audio use a static waveform; only real transcription spins", () => {
+test("idle and saved audio use static level bars; only real transcription spins", () => {
   assert.equal(M.barGlyph("idle"), M.GLYPH);
   assert.equal(M.barGlyph("captured"), M.GLYPH);
   for (const state of ["idle", "captured", "transcribing"]) {

@@ -35,7 +35,10 @@ var STATES = ["idle", "detected", "recording", "ending",
 var SESSION_STATES = STATES.concat(["pending"]);
 
 // Persistent audio identity, shared by the bar, panel and saved sessions.
-var GLYPH = "󱑽";             // U+F147D, Material Design waveform
+// Level bars rather than a waveform: at the bar's 13 px icon font a waveform
+// collapses into its own centre line and its peaks are one pixel wide, which
+// is unreadable at a glance. Three solid bars survive the size.
+var GLYPH = "󰺢";             // U+F0EA2, Material Design equalizer
 var GLYPH_WORKING = "󰝲";     // loading, animated only during transcription
 var GLYPH_STOP = "󰓛";        // stop square, for the Stop action
 var GLYPH_DONE = "󰄬";         // check
@@ -289,7 +292,7 @@ function visible(state) {
 
 // A queue nothing will drain. With `transcription_backend: "none"` a captured
 // session is the designed end state, not work in progress, so the bar shows a
-// static waveform and no count: the count lives in the panel, where the reason
+// static level meter and no count: the count lives in the panel, where the reason
 // is printed next to it. A spinner or a permanent "1 queued" would claim that
 // something is happening.
 function deferred(view, nowMs) {

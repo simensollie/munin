@@ -638,7 +638,8 @@ captures.
 Placement: the centre section, immediately right of the weather
 (`omarchy bar put local.munin --section center --after omarchy.weather`), because
 the widget is a state indicator that has to be noticed mid-meeting rather than
-looked for. A persistent waveform also keeps recordings accessible while idle. An
+looked for. A persistent level-bar mark also keeps recordings accessible while
+idle. An
 anchor id rather than an index, since an index means a different place on every
 bar. This writes
 `shell.json` and hot-reloads. Note that `shell.json` is deployed as a copy, never
@@ -648,13 +649,13 @@ States rendered, one at a time:
 
 | State | Shows | Meaning |
 |---|---|---|
-| idle | waveform | No call; recordings remain accessible |
-| detected | dim waveform and app name | A call is live, Munin is not recording |
+| idle | level bars | No call; recordings remain accessible |
+| detected | dim level bars and app name | A call is live, Munin is not recording |
 | recording | red dot, pulsing, elapsed | Capturing |
 | ending | red dot, steady, elapsed | Streams gone, grace period running |
-| captured | static waveform | Audio saved; queue count only when transcription is configured |
-| transcribing | animated loading glyph with queue depth | Worker running; waveform instead when transcription is disabled |
-| done | ✓ for 30 s, then waveform | Transcript landed |
+| captured | static level bars | Audio saved; queue count only when transcription is configured |
+| transcribing | animated loading glyph with queue depth | Worker running; level bars instead when transcription is disabled |
+| done | ✓ for 30 s, then level bars | Transcript landed |
 | failed | ! until acknowledged | Audio retained; a failure that hides itself is a lost meeting |
 ### 9.3 Keybinding
 
