@@ -77,12 +77,12 @@ field of the `event` reply is for.
 
 | State | Bar shows |
 |---|---|
-| `idle` | nothing — the widget hides itself |
-| `detected` | dim microphone glyph and the app label |
+| `idle` | static level bars, opening the recordings panel |
+| `detected` | dim level bars and the app label |
 | `recording` | pulsing red dot and `HH:MM:SS` |
 | `ending` | the same red dot held steady, still counting |
-| `captured` | a static glyph and the queue depth — the audio is safe and nothing is running |
-| `transcribing` | a turning glyph and the queue depth |
+| `captured` | static level bars and the queue depth (no count when transcription is disabled) — the audio is safe and nothing is running |
+| `transcribing` | a turning refresh glyph and the queue depth |
 | `done` | a tick and "Transcript ready", for 30 s |
 | `failed` | an exclamation and "Retry", until it is acknowledged |
 
@@ -92,10 +92,19 @@ is named in `Model.js`: a state maps to a *tone* (`urgent`, `foreground`,
 `dim`) and `BarWidget.qml` resolves that against the theme, so a theme change
 needs no code.
 
-`󰻂` (U+F0EC2), the glyph `bar/indicators/ScreenRecording.qml` uses, is Munin's
-identity mark in the panel hero and on the primary button. The bar mark while
-recording is a red dot instead, because a dot is read at a glance and a glyph
-is not — that is what sketch 01 draws.
+The level bars (`󰺢`, U+F0EA2) are Munin's persistent identity in the bar,
+panel hero and saved-session rows. Bars rather than a waveform because the bar
+draws its icons at 13 px, where a waveform collapses into its own centre line;
+three solid bars still read. Active recording uses a pulsing dot; ending uses a
+steady dot. The Stop action uses a square. Completed transcripts show a check
+for 30 seconds before returning to the bars. The spinner, the check and the
+alert are all weighted cuts (`󰑐`, `󰸞`, `󰀦`) for the same reason the
+identity mark is: the thin ones are gone at 13 px, and the spinner is a closed
+circular arrow because an arc that is mostly whitespace reads as nothing once
+it turns. Only the spinner is transformed, so it alone renders with
+`Text.QtRendering`; Qt hints a native glyph for a pixel grid a rotation takes
+it off. Transcription disabled means saved
+audio, with static bars and explanatory panel text, never a spinner.
 
 ## Detection
 
@@ -148,7 +157,7 @@ cp -r plugin/local.munin ~/.config/omarchy/plugins/local.munin
 omarchy plugin validate ~/.config/omarchy/plugins/local.munin
 omarchy-shell shell rescanPlugins          # make the live shell see it
 omarchy plugin enable local.munin          # enabling is a live IPC call
-omarchy bar put local.munin --before omarchy.tray
+omarchy bar put local.munin --section center --after omarchy.weather
 ```
 
 Copy, never symlink: `omarchy plugin validate` rejects a plugin folder that

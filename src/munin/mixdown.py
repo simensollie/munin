@@ -7,9 +7,11 @@ one file. Plaud's importer takes MP3 or OPUS, one file per meeting, five hours
 maximum, so until a transcription backend runs on this machine the mix is how a
 recording becomes text at all.
 
-Produced on demand by ``munin mix``, never automatically: it is a derived file
-and it regenerates from the tracks in a few seconds, so a session nobody uploads
-never needs one.
+Produced by ``munin mix``, and by ``munin-work`` on every sweep when
+``[export] enabled`` is set (contracts amendment 2026-09-18). It stays a derived
+file that regenerates from the tracks in a few seconds and is absent from the
+session record, which is what makes producing it twice harmless and a missed
+export self-healing.
 
 **This module is temporary (D25).** It exists because the PoC ships
 ``backend = "none"``. Once M4 transcribes on this machine, delete it, the ``mix``

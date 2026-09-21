@@ -176,7 +176,7 @@
   .panel-stage { padding: 0 0 22px; background: var(--sh-bg); }
   .panel {
     width: min(360px, 100%);
-    margin-left: auto; margin-right: 14px;
+    margin-left: auto; margin-right: auto;
     background: var(--sh-panel);
     border: 1px solid var(--sh-line-s);
     border-top: 0;
@@ -507,9 +507,10 @@
           </div>
           <div class="bar-sec">
             <span class="mod live">Monday 14:07</span>
+            <span class="mod live">󰖐 6°</span>
+            <span class="mod rec"><span class="dot pulse"></span> <span class="num">00:42:11</span></span>
           </div>
           <div class="bar-sec">
-            <span class="mod rec"><span class="dot pulse"></span> <span class="num">00:42:11</span></span>
             <span class="mod">󰅢</span>
             <span class="mod">󰂯</span>
             <span class="mod">󰤨</span>
@@ -520,7 +521,7 @@
         </div>
         <div class="desk"></div>
       </div>
-      <figcaption class="cap">Recording state. Placement via <code>omarchy bar put local.munin --before omarchy.tray</code>, which writes it into <code>shell.json</code> and hot-reloads — no restart.</figcaption>
+      <figcaption class="cap">Recording state. Placement via <code>omarchy bar put local.munin --section center --after omarchy.weather</code>, which writes it into <code>shell.json</code> and hot-reloads — no restart.</figcaption>
     </figure>
   </section>
 
@@ -594,9 +595,12 @@
             <span class="mod live">󰣇</span>
             <span class="mod live">1 2 <b style="color:var(--sh-fg)">3</b></span>
           </div>
-          <div class="bar-sec"><span class="mod live">Monday 14:07</span></div>
           <div class="bar-sec">
+            <span class="mod live">Monday 14:07</span>
+            <span class="mod live">󰖐 6°</span>
             <span class="mod rec" style="background:var(--sh-sel)"><span class="dot pulse"></span> <span class="num">00:42:11</span></span>
+          </div>
+          <div class="bar-sec">
             <span class="mod">󰅢</span>
             <span class="mod">󰂯</span>
             <span class="mod">󰤨</span>
@@ -1169,7 +1173,7 @@ device = <b>"cuda"</b>                         <i>always local, whatever the ASR
           <tr><td>1</td><td>Check <code>ffmpeg</code>, <code>pipewire</code>, Python 3.12+, <code>uv</code>; offer <code>omarchy pkg add</code> for anything missing</td><td>nothing yet</td></tr>
           <tr><td>2</td><td>Install the CLI, daemon and worker</td><td><code>~/.local/bin/munin*</code></td></tr>
           <tr><td>3</td><td>Install and validate the shell plugin</td><td><code>~/.config/omarchy/plugins/local.munin/</code></td></tr>
-          <tr><td>4</td><td>Put the widget in the bar</td><td><code>omarchy bar put local.munin --before omarchy.tray</code></td></tr>
+          <tr><td>4</td><td>Put the widget in the bar</td><td><code>omarchy bar put local.munin --section center --after omarchy.weather</code></td></tr>
           <tr><td>5</td><td>Bind the key, unbinding first if Omarchy already owns it</td><td><code>~/.config/hypr/bindings.lua</code> — backed up first</td></tr>
           <tr><td>6</td><td>Copy the systemd user unit, print the enable command rather than running it</td><td><code>~/.config/systemd/user/munin.service</code></td></tr>
           <tr><td>7</td><td>Create the data root and a default config</td><td><code>~/munin/</code>, <code>~/munin/config.toml</code></td></tr>

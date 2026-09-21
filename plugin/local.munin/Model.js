@@ -36,17 +36,19 @@ var STATES = ["idle", "detected", "recording", "ending",
 // arrives at the widget as "unknown", which is rendered exactly like a failure.
 var SESSION_STATES = STATES.concat(["pending", "split"]);
 
-// Munin's identity glyph: U+F0EC2, the one bar/indicators/ScreenRecording.qml
-// uses. It is the panel hero icon rather than the bar mark, because the bar
-// mark for an active recording is a red dot (sketch 01), which reads at a
-// glance in a way a glyph does not.
-var GLYPH = "󰻂";
-
-var GLYPH_DETECTED = "󰍬";     // microphone, dim: a call is live, we are not recording
-var GLYPH_WORKING = "󰑓";      // refresh, spun by the widget while transcribing
-var GLYPH_WAITING = "󰔟";      // hourglass: captured and waiting, nothing running
-var GLYPH_DONE = "󰄬";         // check
-var GLYPH_FAILED = "󰀪";       // alert
+// Persistent audio identity, shared by the bar, panel and saved sessions.
+// Level bars rather than a waveform: at the bar's 13 px icon font a waveform
+// collapses into its own centre line and its peaks are one pixel wide, which
+// is unreadable at a glance. Three solid bars survive the size.
+var GLYPH = "󰺢";             // U+F0EA2, Material Design equalizer
+// The rest are picked for the same 13 px: a hairline stroke disappears at
+// bar size, so each of these is the weighted cut of its shape. The spinner
+// is a closed circular arrow rather than an arc, because a shape that is
+// almost all whitespace reads as nothing at all once it is turning.
+var GLYPH_WORKING = "󰑐";     // U+F0450, refresh: spun while transcribing
+var GLYPH_STOP = "󰓛";        // U+F04DB, stop square, for the Stop action
+var GLYPH_DONE = "󰸞";        // U+F0E1E, check, bold cut
+var GLYPH_FAILED = "󰀦";      // U+F0026, alert, solid triangle
 var GLYPH_FOLDER = "󰉋";       // folder, for the "open recordings" row
 
 // `done` is shown for 30 s after the last transcript lands, then the widget
@@ -289,15 +291,14 @@ function pad2(n) {
 
 // ---------------------------------------------------------------- bar
 
-// idle hides the widget entirely (spec 9.2). Every other state shows exactly
-// one thing.
+// Keep Munin available as the entry point to recordings, including while idle.
 function visible(state) {
-    return String(state || "idle") !== "idle";
+    return true;
 }
 
 // A queue nothing will drain. With `transcription_backend: "none"` a captured
 // session is the designed end state, not work in progress, so the bar shows a
-// quiet hourglass and no count: the count lives in the panel, where the reason
+// static level meter and no count: the count lives in the panel, where the reason
 // is printed next to it. A spinner or a permanent "1 queued" would claim that
 // something is happening.
 function deferred(view, nowMs) {
@@ -307,7 +308,7 @@ function deferred(view, nowMs) {
 }
 
 function barGlyphFor(view, nowMs) {
-    if (deferred(view, nowMs)) return GLYPH_WAITING;
+    if (deferred(view, nowMs)) return GLYPH;
     return barGlyph(effectiveState(view, nowMs));
 }
 
@@ -318,8 +319,9 @@ function barToneFor(view, nowMs) {
 
 function barGlyph(state) {
     switch (String(state || "idle")) {
-    case "detected": return GLYPH_DETECTED;
-    case "captured":
+    case "idle":
+    case "detected":
+    case "captured": return GLYPH;
     case "transcribing": return GLYPH_WORKING;
     case "done": return GLYPH_DONE;
     case "failed": return GLYPH_FAILED;
@@ -356,6 +358,10 @@ function barShowsDot(state) {
 // the PoC, where the backend is `none`, that is the *designed* end state and it
 // persists indefinitely. A spinner there is an infinite animation repainting the
 // bar forever, claiming work that nothing is doing.
+function barSpinsFor(view, nowMs) {
+    return !deferred(view, nowMs) && barSpins(effectiveState(view, nowMs));
+}
+
 function barSpins(state) {
     return String(state || "idle") === "transcribing";
 }
@@ -558,7 +564,7 @@ function sessionGlyph(state) {
     case "failed":
     case "unknown": return GLYPH_FAILED;
     case "transcribing": return GLYPH_WORKING;
-    default: return GLYPH_WAITING;    // captured, pending: safe, waiting
+    default: return GLYPH;    // captured, pending: audio saved
     }
 }
 

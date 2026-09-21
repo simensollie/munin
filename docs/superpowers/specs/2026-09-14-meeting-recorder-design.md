@@ -687,7 +687,13 @@ Three findings shape this:
 a recording, so the plugin detects, prompts and renders while `munin-rec`
 captures.
 
-Placement: `omarchy bar put local.munin --before omarchy.tray`, which writes
+Placement: the centre section, immediately right of the weather
+(`omarchy bar put local.munin --section center --after omarchy.weather`), because
+the widget is a state indicator that has to be noticed mid-meeting rather than
+looked for. A persistent level-bar mark also keeps recordings accessible while
+idle. An
+anchor id rather than an index, since an index means a different place on every
+bar. This writes
 `shell.json` and hot-reloads. Note that `shell.json` is deployed as a copy, never
 a symlink, because `omarchy-shell-config` writes with an atomic rename.
 
@@ -695,12 +701,13 @@ States rendered, one at a time:
 
 | State | Shows | Meaning |
 |---|---|---|
-| idle | (hidden) | No call |
-| detected | dim mic glyph | A call is live, Munin is not recording |
+| idle | level bars | No call; recordings remain accessible |
+| detected | dim level bars and app name | A call is live, Munin is not recording |
 | recording | red dot, pulsing, elapsed | Capturing |
 | ending | red dot, steady, elapsed | Streams gone, grace period running |
-| transcribing | ⟳ with queue depth | Captured and safe; worker running or waiting |
-| done | ✓ for 30 s | Transcript landed |
+| captured | static level bars | Audio saved; queue count only when transcription is configured |
+| transcribing | turning refresh glyph with queue depth | Worker running; level bars instead when transcription is disabled |
+| done | ✓ for 30 s, then level bars | Transcript landed |
 | failed | ! until acknowledged | Audio retained; a failure that hides itself is a lost meeting |
 ### 9.3 Keybinding
 
@@ -786,8 +793,30 @@ consciously given up. Deciding which is what closes this section; deleting the
 export and quietly missing the summaries afterwards is the failure mode.
 
 Each session therefore retains a **mixed-down copy** alongside the two tracks,
-written on demand by `munin mix` rather than automatically, since it regenerates
-from the tracks in seconds.
+written by `munin mix`, or by `munin-work` on every sweep when `[export]` is
+enabled:
+
+```toml
+[export]
+enabled   = false            # opt in once, instead of per meeting
+directory = "~/plaud-upload"
+format    = "opus"
+```
+
+The first version of this section made the mix strictly on-demand, on the
+grounds that it regenerates from the tracks in seconds and a session nobody
+uploads never needs one. That is still true of the *file*; it was wrong about
+the *folder*. A manual step with no reminder is a step that stops happening:
+three meetings sat unexported for a day on the reference machine, and nothing
+could have said so, because the mix is deliberately absent from the session
+record (contracts §7.2) and there is therefore no "not exported yet" to query.
+Automating the copy is the cheaper of the two fixes; the other is upload state
+in session metadata, which this section already asks for below and which costs
+a `session.json` field on a surface D25 deletes.
+
+`enabled = false` is the shipped default, since the folder stages meeting audio
+for a third party under its retention rather than yours (§12), and D11 calls
+this route opt-in. Enabling it moves the opt-in from per meeting to once.
 
 Plaud accepts MP3 and OPUS only, 5 hours maximum. **The mix is Opus at 24 kbps
 mono**, the bitrate the tracks themselves are captured at, in Opus's `voip`
@@ -998,7 +1027,7 @@ git clone <repo> ~/dev/munin && ~/dev/munin/install.sh
 | 1 | Check `ffmpeg`, `pipewire`, Python 3.12+, `uv`; offer `omarchy pkg add` for anything missing | nothing yet |
 | 2 | Install CLI, daemon and worker | `~/.local/bin/munin*` |
 | 3 | Install and validate the shell plugin | `~/.config/omarchy/plugins/local.munin/` |
-| 4 | Put the widget in the bar | `omarchy bar put local.munin --before omarchy.tray` |
+| 4 | Put the widget in the bar | `omarchy bar put local.munin --section center --after omarchy.weather` |
 | 5 | Bind the key, unbinding first if Omarchy owns it | `~/.config/hypr/bindings.lua`, backed up first |
 | 6 | Copy the systemd user unit, print the enable command rather than running it | `~/.config/systemd/user/munin.service` |
 | 7 | Create the data root and a default config | `~/munin/`, `~/munin/config.toml` |

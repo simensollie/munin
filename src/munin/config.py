@@ -25,6 +25,7 @@ __all__ = [
     "Config",
     "ConfigError",
     "DetectionConfig",
+    "ExportConfig",
     "IdleConfig",
     "NotificationConfig",
     "PathsConfig",
@@ -149,6 +150,18 @@ method  = "omarchy-stay-awake"
 [notifications]
 enabled = true
 glyph   = "\\U000f0ec2"
+
+[export]
+# A copy of the mix outside the session directory, for the manual Plaud upload
+# (spec 10). Off by default: that route is opt-in (D11), and the copy leaves
+# meeting audio in a folder staged for a third party, under its retention rather
+# than yours. Turned on, every finished recording is mixed and copied here
+# without being asked -- which is the only thing that makes the folder current.
+# `directory` is absolute or ~-relative, unlike [paths], which is under `home`.
+# The whole section goes when the local pipeline transcribes (D25).
+enabled   = false
+directory = "~/plaud-upload"
+format    = "opus"
 """
 
 
@@ -202,6 +215,13 @@ class NotificationConfig:
 
 
 @dataclass(frozen=True)
+class ExportConfig:
+    enabled: bool = False
+    directory: str = "~/plaud-upload"
+    format: str = "opus"
+
+
+@dataclass(frozen=True)
 class Config:
     """The whole file, defaults applied."""
 
@@ -212,6 +232,7 @@ class Config:
     transcribe: TranscribeConfig = field(default_factory=TranscribeConfig)
     idle: IdleConfig = field(default_factory=IdleConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
+    export: ExportConfig = field(default_factory=ExportConfig)
     unknown_keys: tuple[str, ...] = ()
     source_path: Path | None = None
 
@@ -235,6 +256,13 @@ class Config:
     @property
     def log_path(self) -> Path:
         return self.home / self.paths.log
+
+    @property
+    def export_dir(self) -> Path:
+        """Outside ``home``, unlike every path above: the upload folder is a
+        staging area the user shares with a third party, not munin's own store.
+        """
+        return Path(self.export.directory).expanduser()
 
 
 # --------------------------------------------------------------------------
@@ -262,6 +290,7 @@ _SCALAR_FIELDS: dict[str, dict[str, type]] = {
     "transcribe": {"backend": str},
     "idle": {"inhibit": bool, "method": str},
     "notifications": {"enabled": bool, "glyph": str},
+    "export": {"enabled": bool, "directory": str, "format": str},
 }
 
 _DETECTION_SOURCES = ("plugin", "daemon", "off")
@@ -269,6 +298,11 @@ _DETECTION_SOURCES = ("plugin", "daemon", "off")
 # For an ad-hoc `munin start` with no detected call: record the whole output
 # mix, or leave the app track silent.
 _ADHOC_APP_SOURCES = ("system-output", "silent")
+
+# Both are what Plaud's importer accepts (spec 10, Appendix A). Duplicated from
+# mixdown.FORMATS rather than imported, to keep config free of pipeline imports;
+# a test pins the two together.
+_EXPORT_FORMATS = ("opus", "mp3")
 
 _APP_RULE_KEYS = (
     "app_id",
@@ -407,6 +441,7 @@ def load(path: Path | None = None) -> Config:
     )
     idle_known = _section(raw, "idle", unknown)
     notifications_known = _section(raw, "notifications", unknown)
+    export_known = _section(raw, "export", unknown)
 
     for name in raw:
         if name not in {
@@ -417,6 +452,7 @@ def load(path: Path | None = None) -> Config:
             "transcribe",
             "idle",
             "notifications",
+            "export",
         }:
             unknown.append(name)
 
@@ -450,6 +486,16 @@ def load(path: Path | None = None) -> Config:
             + f", got {capture.adhoc_app_source!r}"
         )
 
+    export = ExportConfig(**export_known)
+    if export.format not in _EXPORT_FORMATS:
+        raise ConfigError(
+            "[export] format must be one of "
+            + ", ".join(_EXPORT_FORMATS)
+            + f", got {export.format!r}"
+        )
+    if export.enabled and not export.directory.strip():
+        raise ConfigError("[export] directory must not be empty when enabled")
+
     return Config(
         home=home,
         paths=PathsConfig(**paths_known),
@@ -460,6 +506,7 @@ def load(path: Path | None = None) -> Config:
         ),
         idle=IdleConfig(**idle_known),
         notifications=NotificationConfig(**notifications_known),
+        export=export,
         unknown_keys=tuple(unknown),
         source_path=source_path,
     )

@@ -34,10 +34,12 @@ if [[ ${1:-} == plugin && ${2:-} == validate ]]; then
   exit 0
 fi
 # Enabling a plugin that declares a bar-widget also PLACES it, the way the real
-# PluginRegistry does: --before puts it in front of the named widget, and with
-# no placement it lands after the section's default anchor (omarchy.tray). A
-# shim that made `enable` a no-op would let install.sh assert an ordering the
-# real shell never produces.
+# PluginRegistry does: a placement is honoured (--after/--before an anchor,
+# or --section/--index), an anchor that is not on the bar *fails* the enable
+# (PluginRegistry.barTarget: "could not find target widget"), and with no
+# anchor the widget lands after the section's own default anchor --
+# omarchy.weather for center. A shim that made `enable` a no-op would let
+# install.sh assert an ordering the real shell never produces.
 if [[ ${1:-} == plugin && ${2:-} == enable ]]; then
   # `omarchy plugin enable` talks to a running shell over a socket and fails
   # when there is none -- an ssh or bare-TTY install. SHIM_NO_SHELL=1 is that.
@@ -48,20 +50,51 @@ if [[ ${1:-} == plugin && ${2:-} == enable ]]; then
     "$SHIM_SHELL_JSON" >/dev/null; then
     exit 0
   fi
+  section=""
+  index=""
+  anchor=""
+  offset=0
+  shift 3 || true
+  while (( $# )); do
+    case "${1:-}" in
+      --section) section="${2:-}"; shift 2 ;;
+      --index) index="${2:-}"; shift 2 ;;
+      --before) anchor="${2:-}"; offset=0; shift 2 ;;
+      --after) anchor="${2:-}"; offset=1; shift 2 ;;
+      *) shift ;;
+    esac
+  done
+  [[ -n $section ]] || section="center"   # the manifest's defaultSection
   tmp="$(mktemp)"
-  if [[ ${4:-} == --before ]]; then
-    jq --arg id "$pid" --arg anchor "${5:-}" '
-      .bar.layout.right |= (
-        (map(.id == $anchor) | index(true)) as $i
-        | if $i == null then . + [{id: $id}]
-          else .[0:$i] + [{id: $id}] + .[$i:] end
+  if [[ -n $anchor ]]; then
+    jq -e --arg anchor "$anchor" \
+      '[.bar.layout[]?[]? | select(.id == $anchor)] | length > 0' \
+      "$SHIM_SHELL_JSON" >/dev/null || {
+        echo "could not find target widget $anchor" >&2
+        rm -f "$tmp"
+        exit 1
+      }
+    jq --arg id "$pid" --arg anchor "$anchor" --argjson off "$offset" '
+      .bar.layout |= with_entries(
+        .value |= (
+          (map(.id == $anchor) | index(true)) as $i
+          | if $i == null then . else .[0:$i + $off] + [{id: $id}] + .[$i + $off:] end
+        )
+      )' "$SHIM_SHELL_JSON" >"$tmp"
+  elif [[ -n $index ]]; then
+    jq --arg id "$pid" --arg section "$section" --argjson i "$index" '
+      .bar.layout[$section] |= (
+        (. // []) as $w | $w[0:$i] + [{id: $id}] + $w[$i:]
       )' "$SHIM_SHELL_JSON" >"$tmp"
   else
-    jq --arg id "$pid" --arg anchor "omarchy.tray" '
-      .bar.layout.right |= (
-        (map(.id == $anchor) | index(true)) as $i
-        | if $i == null then . + [{id: $id}]
-          else .[0:$i + 1] + [{id: $id}] + .[$i + 1:] end
+    # No anchor given: after the section's default anchor, or at the end.
+    jq --arg id "$pid" --arg section "$section" --arg anchor \
+      "$(case "$section" in left) echo omarchy.workspaces ;; center) echo omarchy.weather ;; *) echo omarchy.tray ;; esac)" '
+      .bar.layout[$section] |= (
+        (. // []) as $w
+        | ($w | map(.id == $anchor) | index(true)) as $i
+        | if $i == null then $w + [{id: $id}]
+          else $w[0:$i + 1] + [{id: $id}] + $w[$i + 1:] end
       )' "$SHIM_SHELL_JSON" >"$tmp"
   fi
   mv "$tmp" "$SHIM_SHELL_JSON"
@@ -218,7 +251,7 @@ SHELL_JSON_FIXTURE = {
         "position": "top",
         "layout": {
             "left": [{"id": "omarchy.menu"}],
-            "center": [{"id": "omarchy.clock"}],
+            "center": [{"id": "omarchy.clock"}, {"id": "omarchy.weather"}],
             "right": [{"id": "omarchy.tray"}, {"id": "omarchy.power"}],
         },
     },

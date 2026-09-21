@@ -10,8 +10,8 @@
 // one is a pure function of the daemon's state.json -- see Model.js. Nothing
 // here decides anything:
 //
-//   idle          hidden
-//   detected      dim microphone glyph and the app label
+//   idle          static level bars
+//   detected      dim level bars and the app label
 //   recording     pulsing red dot and elapsed time
 //   ending        the same red dot held steady, still counting
 //   transcribing  a turning glyph and the queue depth
@@ -66,6 +66,7 @@ Panel {
     readonly property bool counting: barState === "recording" || barState === "ending"
     readonly property string barLabel: Model.barLabel(status, nowMs)
     readonly property string barGlyphText: Model.barGlyphFor(status, nowMs)
+    readonly property bool spinning: Model.barSpinsFor(status, nowMs)
 
     // `Panel` is not `BarWidget`, so the bar geometry it lifts off the host
     // has to be lifted here instead.
@@ -259,12 +260,17 @@ Panel {
                 color: root.barTint
                 font.family: root.fontFamily
                 font.pixelSize: Style.bar.iconFont
-                renderType: Text.NativeRendering
+                // Native rendering is the house default and the sharper of the
+                // two at rest, but Qt's own advice is not to transform it: a
+                // rotated native glyph is hinted for a grid it no longer sits
+                // on. The spinner is the one transformed glyph here, so it
+                // renders the other way for as long as it turns.
+                renderType: root.spinning ? Text.QtRendering : Text.NativeRendering
 
                 RotationAnimation {
                     target: glyphText
                     property: "rotation"
-                    running: glyphText.visible && Model.barSpins(root.barState)
+                    running: glyphText.visible && root.spinning
                     loops: Animation.Infinite
                     from: 0
                     to: 360
@@ -347,9 +353,9 @@ Panel {
                         foreground: root.foreground
                         fontFamily: root.fontFamily
 
-                        // Munin's identity glyph: U+F0EC2, the one
-                        // bar/indicators/ScreenRecording.qml uses for its own
-                        // recording indicator.
+                        // Munin's identity glyph: the level bars (U+F0EA2),
+                        // the same mark the bar and the session rows use, so
+                        // the panel hero reads as the same thing enlarged.
                         iconComponent: Component {
                             Text {
                                 textFormat: Text.PlainText
@@ -484,7 +490,7 @@ Panel {
 
                         Button {
                             text: Model.primaryActionFor(root.status, root.nowMs).label
-                            iconText: root.counting ? Model.GLYPH : ""
+                            iconText: root.counting ? Model.GLYPH_STOP : ""
                             bordered: true
                             foreground: root.counting ? root.urgent : root.foreground
                             fontFamily: root.fontFamily
@@ -617,7 +623,9 @@ Panel {
         case "ending": return "Meeting seems over. Recording stops soon.";
         case "captured":
         case "transcribing":
-            return root.status.queue_depth + " in the queue, audio safe on disk.";
+            return Model.deferred(root.status, root.nowMs)
+                ? "Audio saved. Transcription is not configured."
+                : root.status.queue_depth + " in the queue, audio safe on disk.";
         case "done": return "Transcript ready.";
         case "failed": return "Failed. The audio is kept.";
         default:

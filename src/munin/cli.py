@@ -109,7 +109,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--format",
         dest="format",
         choices=("opus", "mp3"),
-        default="opus",
+        default=None,
         help="upload format; opus is a third the size of mp3 at better quality (spec 10)",
     )
     mix.add_argument("--force", action="store_true", help="re-encode even if mixed.mp3 exists")
@@ -117,7 +117,10 @@ def build_parser() -> argparse.ArgumentParser:
         "--to",
         default=None,
         metavar="DIR",
-        help="also copy the mix there, named after the session title",
+        help=(
+            "also copy the mix there, named after the session title; "
+            "defaults to [export] directory when that section is enabled"
+        ),
     )
 
     split_cmd = sub.add_parser(
@@ -315,7 +318,13 @@ def _cmd_mix(args: argparse.Namespace) -> int:
         print("give a session id or --all, not both", file=sys.stderr)
         return EXIT_USAGE
 
-    spool = Spool(_config())
+    config = _config()
+    # Flag beats config beats built-in default. With [export] enabled, a bare
+    # `munin mix` therefore refills the upload folder the same way the worker
+    # does, which is what makes running it by hand and letting it happen
+    # automatically produce the same files.
+    fmt = args.format or config.export.format
+    spool = Spool(config)
     if args.all:
         sessions = [
             session
@@ -342,19 +351,22 @@ def _cmd_mix(args: argparse.Namespace) -> int:
             return EXIT_PRECONDITION
         sessions = [latest]
 
-    destination = Path(args.to).expanduser() if args.to else None
+    if args.to:
+        destination = Path(args.to).expanduser()
+    elif config.export.enabled:
+        destination = config.export_dir
+    else:
+        destination = None
     if destination is not None:
         destination.mkdir(parents=True, exist_ok=True)
 
     failed = 0
     for session in sessions:
         already = (
-            mixdown_module.mixed_path(session, args.format).exists() and not args.force
+            mixdown_module.mixed_path(session, fmt).exists() and not args.force
         )
         try:
-            path = mixdown_module.mixdown(
-                session, fmt=args.format, force=bool(args.force)
-            )
+            path = mixdown_module.mixdown(session, fmt=fmt, force=bool(args.force))
         except mixdown_module.MixdownError as exc:
             print(str(exc), file=sys.stderr)
             failed += 1
@@ -363,9 +375,7 @@ def _cmd_mix(args: argparse.Namespace) -> int:
         if already:
             line += "  (already mixed)"
         if destination is not None:
-            copy = destination / mixdown_module.export_filename(
-                session.id, args.format
-            )
+            copy = destination / mixdown_module.export_filename(session.id, fmt)
             shutil_module.copy2(path, copy)
             line += f"  -> {copy}"
         print(line)

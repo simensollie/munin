@@ -343,6 +343,52 @@ def test_mix_copies_to_an_upload_folder_under_the_session_name(
     assert mixed_path(session).exists()
 
 
+def test_mix_falls_back_to_the_configured_export_folder(
+    munin_home: Path, spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    """A bare `munin mix` refills the same folder the worker does, so doing it
+    by hand and letting it happen produce the same files (amendment 2026-09-18).
+    """
+    target = tmp_path / "uploads"
+    (munin_home / "config.toml").write_text(
+        f'[export]\nenabled = true\ndirectory = "{target}"\n', encoding="utf-8"
+    )
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+
+    assert cli.main(["mix", session.id]) == cli.EXIT_OK
+
+    assert (target / f"{session.id}.opus").exists()
+
+
+def test_mix_without_an_enabled_export_copies_nowhere(
+    munin_home: Path, spool: Spool, two_track, capsys
+) -> None:
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+
+    assert cli.main(["mix", session.id]) == cli.EXIT_OK
+
+    assert mixed_path(session).exists()
+    assert "->" not in capsys.readouterr().out
+
+
+def test_mix_format_follows_the_configured_export_format(
+    munin_home: Path, spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    target = tmp_path / "uploads"
+    (munin_home / "config.toml").write_text(
+        f'[export]\nenabled = true\ndirectory = "{target}"\nformat = "mp3"\n',
+        encoding="utf-8",
+    )
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+
+    assert cli.main(["mix", session.id]) == cli.EXIT_OK
+
+    assert (target / f"{session.id}.mp3").exists()
+    # The flag still wins over the config.
+    assert cli.main(["mix", session.id, "--format", "opus"]) == cli.EXIT_OK
+    assert (target / f"{session.id}.opus").exists()
+
+
 def test_mix_refuses_an_unknown_session(spool: Spool, capsys) -> None:
     assert cli.main(["mix", "2026-01-01T0000-no-such-meeting"]) == cli.EXIT_USAGE
     assert "no session" in capsys.readouterr().err

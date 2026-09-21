@@ -195,6 +195,9 @@ def test_unknown_keys_are_reported_not_dropped(munin_home: Path) -> None:
         ("[capture]\nsample_rate = 0\n", "must be positive"),
         ('[capture]\nadhoc_app_source = "everything"\n', "adhoc_app_source must be one of"),
         ('[transcribe]\nfallback = "ssh"\n', "list of backend names"),
+        ('[export]\nformat = "flac"\n', "format must be one of"),
+        ('[export]\nenabled = "yes"\n', "true or false"),
+        ('[export]\nenabled = true\ndirectory = "  "\n', "must not be empty"),
         ("[[detection.apps]]\nlabel = \"x\"\n", "needs a app_id string"),
     ],
 )
@@ -229,9 +232,51 @@ def test_the_written_template_parses_back_to_the_defaults(munin_home: Path) -> N
     assert cfg.transcribe == fresh.transcribe
     assert cfg.idle == fresh.idle
     assert cfg.notifications == fresh.notifications
+    assert cfg.export == fresh.export
     assert cfg.paths == fresh.paths
     assert cfg.app_rules == fresh.app_rules
     assert cfg.unknown_keys == ()
+
+
+# -- export (contracts amendment 2026-09-18) --------------------------------
+
+
+def test_export_is_off_until_it_is_asked_for(munin_home: Path) -> None:
+    """The default must not stage meeting audio for a third party (D11, §12)."""
+    cfg = load()
+    assert cfg.export.enabled is False
+    assert cfg.export.format == "opus"
+
+
+def test_the_export_directory_is_not_under_home(munin_home: Path) -> None:
+    """Unlike [paths], which is relative to `home`: this folder is shared with a
+    third party, so it is an absolute or ~-relative path of the user's choosing.
+    """
+    write(munin_home, '[export]\nenabled = true\ndirectory = "~/elsewhere/uploads"\n')
+    cfg = load()
+    assert cfg.export_dir == Path.home() / "elsewhere" / "uploads"
+    assert munin_home not in cfg.export_dir.parents
+
+
+def test_an_absolute_export_directory_is_left_alone(munin_home: Path, tmp_path: Path) -> None:
+    write(munin_home, f'[export]\nenabled = true\ndirectory = "{tmp_path}/up"\n')
+    assert load().export_dir == tmp_path / "up"
+
+
+def test_an_unknown_export_key_is_kept_not_fatal(munin_home: Path) -> None:
+    write(munin_home, "[export]\nenabled = true\nupload = true\n")
+    cfg = load()
+    assert cfg.export.enabled is True
+    assert "export.upload" in cfg.unknown_keys
+
+
+def test_the_export_formats_are_the_ones_mixdown_can_write(munin_home: Path) -> None:
+    """Duplicated in config to keep it free of pipeline imports; pinned here so
+    the two cannot drift.
+    """
+    from munin import mixdown
+
+    assert set(config_module._EXPORT_FORMATS) == set(mixdown.FORMATS)
 
 
 def test_the_template_never_clobbers_a_hand_edited_file(munin_home: Path) -> None:
