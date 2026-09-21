@@ -598,22 +598,29 @@ def split(
 
     halves: list[Session] = []
     for part, title in zip(parts, (first_title, second_title)):
-        half = spool.derive(
-            title=title,
-            parent=session,
-            created=part.started_at,
-            note=(
-                f"part {part.number} of {session.id}, split at "
-                f"{format_offset(at_seconds)} of the audio"
-            ),
-            split_from={
-                "session": session.id,
-                "kind": "offline",
-                "part": part.number,
-                "offset_seconds": round(at_seconds, 3),
-            },
-        )
+        # ``derive`` is inside the try, not before it: it makes the directory,
+        # and it is also where the disk guard lives -- and ``NoSpaceError`` is a
+        # ``StateError``, not an ``OSError``. Left outside, a full disk on part 2
+        # walked out of this function with part 1's audio already written and
+        # nothing pointing at it: a directory with no ``session.json``, which
+        # ``iter_sessions`` skips and nothing ever retries.
+        half: Session | None = None
         try:
+            half = spool.derive(
+                title=title,
+                parent=session,
+                created=part.started_at,
+                note=(
+                    f"part {part.number} of {session.id}, split at "
+                    f"{format_offset(at_seconds)} of the audio"
+                ),
+                split_from={
+                    "session": session.id,
+                    "kind": "offline",
+                    "part": part.number,
+                    "offset_seconds": round(at_seconds, 3),
+                },
+            )
             half.segments = _write_pieces(
                 part, session.directory, half.directory, ffmpeg
             )
@@ -621,10 +628,11 @@ def split(
             half.stopped_at = part.stopped_at
             half.duration_seconds = part.duration_seconds
             half.checksums = spool.checksum_segments(half)
-        except (SplitError, OSError):
+        except (SplitError, OSError, StateError):
             # The half is incomplete and nothing points at it yet. Take the
             # directories back out so a retry is not blocked by a -2 suffix.
-            shutil.rmtree(half.directory, ignore_errors=True)
+            if half is not None:
+                shutil.rmtree(half.directory, ignore_errors=True)
             for done in halves:
                 shutil.rmtree(done.directory, ignore_errors=True)
             raise

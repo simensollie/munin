@@ -77,6 +77,7 @@ __all__ = [
     "MixFormat",
     "PLAUD_MAX_SECONDS",
     "BUSY_STATES",
+    "SKIP_STATES",
     "MixdownError",
     "mix_format",
     "mixed_filename",
@@ -158,6 +159,15 @@ LEDGER_DIRNAME = ".exported"
 
 #: States where the audio files are still being written to.
 BUSY_STATES = frozenset({"recording", "ending"})
+
+#: Sessions an unattended sweep must leave alone. ``BUSY_STATES`` because half a
+#: recording mixed down looks exactly like a whole one afterwards; ``split``
+#: because a split parent holds *both* meetings and its halves hold one each
+#: (D26) -- mixing all three would put the merged recording in the upload folder
+#: beside the two meetings it was cut into. Shared with ``munin mix --all``
+#: rather than restated there: the two lists drifting apart is what let the
+#: worker export a parent the CLI knew to skip.
+SKIP_STATES = BUSY_STATES | frozenset({"split"})
 
 
 class MixdownError(RuntimeError):
