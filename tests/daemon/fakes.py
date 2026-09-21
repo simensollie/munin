@@ -11,6 +11,7 @@ not own fails here rather than on hardware.
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -91,6 +92,8 @@ class FakeSession:
     pending_reason: str | None = None
     error: dict | None = None
     transcript: dict = field(default_factory=lambda: {"txt": None, "json": None})
+    split_from: dict | None = None
+    split_into: list[str] | None = None
     history: list[dict] = field(default_factory=list)
     clock: Callable[[], datetime] | None = None
 
@@ -132,6 +135,8 @@ class FakeSession:
             "pending_reason": self.pending_reason,
             "error": self.error,
             "transcript": self.transcript,
+            "split_from": self.split_from,
+            "split_into": self.split_into,
             "history": self.history,
         }
 
@@ -141,7 +146,24 @@ class FakeSession:
         tmp.write_text(json.dumps(self.to_dict(), ensure_ascii=False, indent=2), encoding="utf-8")
         tmp.replace(self.json_path)
 
-    def transition(self, to: str, *, by: str, **fields: Any) -> None:
+    @contextmanager
+    def lock(self, *, blocking: bool = True) -> Any:
+        """The real session takes an flock here. One process, one thread: no-op."""
+        yield
+
+    def reload(self) -> "FakeSession":
+        """The real session re-reads ``session.json``; this object *is* the store."""
+        return self
+
+    def update(self, **fields: Any) -> None:
+        """Set fields and save, without changing state -- as ``Session`` does."""
+        for name, value in fields.items():
+            if not hasattr(self, name):
+                raise TypeError(f"session has no field {name!r}")
+            setattr(self, name, value)
+        self.save()
+
+    def transition(self, to: str, *, by: str, note: str | None = None, **fields: Any) -> None:
         key = (self.state, to)
         writer = TRANSITIONS.get(key)
         if writer is None:
@@ -150,9 +172,12 @@ class FakeSession:
             raise StateError(f"{by} may not write {self.state} -> {to}; {writer} owns it")
         for name, value in fields.items():
             setattr(self, name, value)
-        self.history.append(
-            {"at": _iso(self._now()), "from": self.state, "to": to, "by": by}
-        )
+        entry = {"at": _iso(self._now()), "from": self.state, "to": to, "by": by}
+        if note:
+            # Mirrors ``Session.transition``: a note is part of the audit row,
+            # never a field on the session.
+            entry["note"] = note
+        self.history.append(entry)
         self.state = to
         self.save()
 

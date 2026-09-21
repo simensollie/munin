@@ -70,7 +70,14 @@ SESSION_FILENAME = "session.json"
 LOCK_FILENAME = ".lock"
 
 SessionState = Literal[
-    "recording", "ending", "captured", "pending", "transcribing", "done", "failed"
+    "recording",
+    "ending",
+    "captured",
+    "pending",
+    "transcribing",
+    "done",
+    "failed",
+    "split",
 ]
 
 STATES: tuple[str, ...] = (
@@ -81,6 +88,7 @@ STATES: tuple[str, ...] = (
     "transcribing",
     "done",
     "failed",
+    "split",
 )
 
 #: ``(from, to) -> writer``. The only legal transitions, and who may write them.
@@ -101,7 +109,18 @@ TRANSITIONS: dict[tuple[str | None, str], str] = {
     ("transcribing", "done"): "munin-work",
     ("pending", "failed"): "munin-work",
     ("transcribing", "failed"): "munin-work",
+    # A session cut in two (D26). The parent keeps its audio and its checksums
+    # untouched and stops being work: ``split`` is terminal, and the worker only
+    # ever looks at captured/pending/transcribing. The two halves are new
+    # sessions, so they enter the table at (None, "captured") rather than being
+    # captured live.
+    ("captured", "split"): "munin",
+    ("pending", "split"): "munin",
+    (None, "captured"): "munin",
 }
+
+#: Terminal states: nothing transitions out of them.
+TERMINAL: frozenset[str] = frozenset({"done", "failed", "split"})
 
 #: States the daemon may find after its own crash, and what they become.
 DAEMON_STATES: frozenset[str] = frozenset({"recording", "ending"})
@@ -256,6 +275,15 @@ class Session:
     error: dict | None = None
     transcript: dict = field(default_factory=dict)
     history: list[dict] = field(default_factory=list)
+    #: Where this session came from, when it was cut out of another one (D26):
+    #: ``{"session": <parent id>, "kind": "offline"|"live", "part": 1|2,
+    #: "offset_seconds": <cut point on the parent's audio timeline, live: null>}``.
+    #: ``None`` on a session that was captured rather than derived.
+    split_from: dict | None = None
+    #: The ids this session was cut into, oldest first. ``None`` on a session
+    #: that was never split. Together with ``split_from`` this is what makes a
+    #: derived transcript traceable to the capture it came from (spec 12).
+    split_into: list[str] | None = None
     #: Keys written by a newer build, kept so a round trip does not lose them.
     extra: dict = field(default_factory=dict)
 
@@ -305,6 +333,8 @@ class Session:
             "pending_reason": self.pending_reason,
             "error": self.error,
             "transcript": dict(self.transcript) or {"txt": None, "json": None},
+            "split_from": dict(self.split_from) if self.split_from else None,
+            "split_into": list(self.split_into) if self.split_into else None,
             "history": [dict(entry) for entry in self.history],
         }
         for key, value in self.extra.items():
@@ -347,6 +377,8 @@ class Session:
             "pending_reason",
             "error",
             "transcript",
+            "split_from",
+            "split_into",
             "history",
         }
         return cls(
@@ -371,6 +403,8 @@ class Session:
             pending_reason=data.get("pending_reason"),
             error=data.get("error"),
             transcript=dict(data.get("transcript") or {}),
+            split_from=dict(data["split_from"]) if data.get("split_from") else None,
+            split_into=list(data["split_into"]) if data.get("split_into") else None,
             history=[dict(entry) for entry in data.get("history", [])],
             extra={k: v for k, v in data.items() if k not in known},
         )
@@ -596,6 +630,92 @@ class Spool:
         )
         session.save()
         self.update_latest(session)
+        return session
+
+    def derive(
+        self,
+        *,
+        title: str,
+        parent: Session,
+        created: datetime,
+        note: str,
+        split_from: dict,
+    ) -> Session:
+        """Make a session out of part of another one (D26), in ``captured``.
+
+        The directory and the id follow exactly the rules :meth:`create` uses,
+        including the collision suffix -- a session cut at the same minute as
+        its parent, under the same title, lands on ``-2`` rather than on top of
+        it. What is *inherited* rather than recomputed is everything that
+        describes the capture: ``source``, ``app``, ``platform``,
+        ``capture_method``, ``host`` and ``munin_version`` are facts about how
+        the audio was made, and cutting it does not make them less true. Only
+        ``segments``, ``checksums`` and the clock fields are the caller's to
+        fill, because those are the ones the cut actually changes.
+
+        The session starts in ``captured``: the audio is already on disk and
+        finished, so it is the worker's from the first moment. ``latest`` is
+        left where it is -- it points at the most recent *capture*, and nothing
+        was captured here.
+
+        **The returned session is not saved.** The directory exists; there is no
+        ``session.json`` in it until the caller writes one. That is deliberate:
+        the worker discovers sessions by scanning for ``session.json`` and
+        claims every ``captured`` one it finds, so a record written before the
+        audio beside it would be claimed mid-copy -- two writers on one session,
+        and a directory being deleted underneath a rollback. Nothing is a
+        session until it is a whole one.
+        """
+        self.ensure_dirs()
+        free = self.free_mb()
+        minimum = self.config.capture.min_free_mb
+        if free < minimum:
+            raise NoSpaceError(
+                f"{free} MB free below {self.recordings}, {minimum} MB required; "
+                "refusing to write a copy of the audio that would truncate"
+            )
+        if created.tzinfo is None:
+            created = created.astimezone()
+
+        resolved_title = title.strip() if title and title.strip() else parent.title
+        slug = slugify(resolved_title)
+        sid = make_session_id(created, resolved_title)
+        directory = session_dir(self.home, created, sid, self.config.paths.recordings)
+        suffix = 1
+        while directory.exists():
+            suffix += 1
+            slug = f"{slugify(resolved_title)}-{suffix}"
+            sid = f"{created:%Y-%m-%dT%H%M}-{slug}"
+            directory = session_dir(
+                self.home, created, sid, self.config.paths.recordings
+            )
+        directory.mkdir(parents=True)
+
+        session = Session(
+            id=sid,
+            directory=directory,
+            state="captured",
+            title=resolved_title,
+            slug=slug,
+            source=parent.source,
+            platform=parent.platform,
+            capture_method=parent.capture_method,
+            host=parent.host,
+            munin_version=parent.munin_version,
+            created_at=created,
+            app=dict(parent.app) if parent.app else None,
+            transcript={"txt": None, "json": None},
+            split_from=dict(split_from),
+            history=[
+                {
+                    "at": to_iso(created),
+                    "from": None,
+                    "to": "captured",
+                    "by": TRANSITIONS[(None, "captured")],
+                    "note": note,
+                }
+            ],
+        )
         return session
 
     # -- reading -----------------------------------------------------------

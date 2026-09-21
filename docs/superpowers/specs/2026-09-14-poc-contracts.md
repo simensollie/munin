@@ -1221,3 +1221,200 @@ used a Chromium tab playing a tone, not a call), whether five concurrent
 Chromium streams all move cleanly under load, and the behaviour when the user
 changes the default sink while a recording is running (the loopback was measured
 following a default-sink change, but not during a capture).
+
+
+### 16.7 Splitting a session that holds two meetings (D26)
+
+**The case.** The user walks out of one meeting and into the next without
+stopping the recording. Nothing failed; one session now holds two meetings,
+which §12 of the spec makes a compliance problem rather than an inconvenience —
+one transcript over two sets of participants, one retention clock, one access
+boundary — and which diarization makes a quality problem, because it clusters
+speakers over whatever it is handed. Nothing in §0–§15 covered it: a
+`call-started` arriving while the daemon was recording was ignored, and inside
+the grace period it was read as the first meeting's stream returning, which is
+precisely what glues the two together.
+
+Spec §6.4 describes the behaviour. This section is the contract change.
+
+**§4, the state machine.** One state and three transitions are added, and a
+third writer, `munin` (the CLI), joins `munin-rec` and `munin-work`:
+
+| From | To | Written by | When |
+|---|---|---|---|
+| `captured`/`pending` | `split` | `munin` | `munin split` has cut this session into two new sessions. Terminal. |
+| — | `captured` | `munin` | A session *derived* from another one: one half of a split, whose audio was finished before it existed. |
+
+`split` is terminal — nothing transitions out of it — and it is outside the set
+the worker sweeps (`captured`, `pending`, `transcribing`), which together are
+what stop a session that has been cut in two from also being transcribed as one.
+The ownership rule of §4 is otherwise unchanged: the daemon still never writes
+`pending`, `transcribing` or `done`, and the worker still never writes
+`recording`, `ending` or `captured` on a session it is capturing. The narrow
+exception is that a session nobody is capturing — a derived half at its birth,
+a parent being retired — is written by `munin`.
+
+**§3, `session.json`.** Two optional keys, both `null` on every session that was
+neither split nor derived. Schema version stays `1`: a reader of this build that
+meets them keeps them, and an older reader round-trips them through `extra`.
+
+| Field | Rule |
+|---|---|
+| `split_from` | `{"session": "<parent id>", "kind": "offline"\|"live", "part": 1\|2, "offset_seconds": float\|null}` on a session cut out of another. `offset_seconds` is the cut point on the parent's audio timeline, `null` for a live split, which cut nothing. |
+| `split_into` | `["<id>", …]`, the sessions this one was cut into, oldest first. Two ids on a `split` parent; one on a `captured` session that was closed by a live split, where it reads "continued as". |
+
+Everything else on a derived half is **inherited, not recomputed**: `source`,
+`app`, `platform`, `capture_method`, `host` and `munin_version` are facts about
+how the audio was made, and cutting it does not make them less true. `source`
+therefore still only ever holds `adhoc` or `detected`. `segments[]` is
+renumbered from 1 and contiguous, with filenames from
+`munin.capture.base.segment_filenames(index)` as §3 requires; `checksums`,
+`started_at`, `stopped_at` and `duration_seconds` are recomputed, because those
+are what the cut actually changes. `app_source` is carried across per segment —
+a sink-monitor track stays a sink-monitor track in both halves.
+
+**The parent is never modified in place.** Its audio and its `checksums` are the
+record of what the machine captured. The halves are new sessions; the parent
+keeps every byte and leaves the queue. The cost is one duplicated copy of the
+audio (a two-hour meeting at 24 kbps is ~43 MB) until retention removes one,
+which is §15.5's open decision and not a new one.
+
+**§7.1, IPC.** One command:
+
+| `cmd` | Args | `data` on success |
+|---|---|---|
+| `split` | `title?: str` | the `start` payload, plus `"closed": "<abs path>"`, `"closed_id": str`, `"closed_duration_seconds": float` |
+
+It finishes the running session exactly as `stop` does and starts the next one
+in the same call, so the two cannot be separated by a failure between them.
+`not_recording` when nothing is being captured, and one new error code:
+`too_soon`, when the recording is under five seconds old. That is what a
+notification clicked twice looks like from here, and without it the second click
+leaves a session of a second or two behind, with a directory, a record and an
+inbox entry of its own. The CLI maps it to exit 4, with the other preconditions.
+
+If the second recording cannot be started (no space, capture failed), the error
+says so *and* names the session that was saved: "split failed" would otherwise
+read as "the last hour is gone", when in fact the first meeting is captured and
+queued exactly as `stop` would have left it.
+
+**§8, notifications.** One row:
+
+| When | Urgency | Title / body | Primary action (`--exec`) | Secondaries live in |
+|---|---|---|---|---|
+| A different call goes live while recording | `normal`, `-t 60000` | "New meeting detected" / "&lt;app&gt; call, &lt;time&gt;, while recording. Click to split here." | `munin split --now` | Panel: *Split here* while `recording`; *Same meeting* is the dismiss, because a split is start-shaped and doing nothing has to mean "no" (spec §6.3). |
+
+Sent once per distinct call per session, not once per detection poll. A call is
+distinct when `(pid, window_title)` differs from the recording session's; a
+`call-started` carrying no pid never qualifies, which is what keeps the panel's
+*Keep recording* button — a bare `munin event call-started` — from reading as a
+second meeting. An ad-hoc session with no identified application is never
+offered a split, for the same reason `on_call_ended` declines the mirror case:
+there is nothing to compare against, and the call is as likely to be this
+meeting joined late.
+
+**The plugin.** Two changes, both in `Model.js` (the plugin still speaks only
+the CLI, D20): the secondary panel button is *Split here* while `recording`
+(`munin split --now`), keeping *Keep recording* during `ending`, where it is the
+contracted action; and a session in `split` renders with the settled glyph and
+the line "split in two", not the waiting glyph, which would read as a transcript
+the worker still owes. `split` also joins `SESSION_STATES`, which is the list
+that actually decides: a session state missing from it arrives at the widget as
+`unknown` and is painted as a *failure* — the same trap `pending` fell into in
+the PoC (§16.4).
+
+`munin mix --all` skips a `split` parent for the same reason the worker does: the
+halves are the meetings, and mixing all three would put the merged recording in
+the upload folder beside them.
+
+**§11, the CLI.** One row:
+
+| Command | Args | Does |
+|---|---|---|
+| `split` | `[session] [at]` `--now` `--clock HH:MM` `--title TEXT` `--title-first TEXT` | Cut a recording that holds two meetings into two sessions (spec §6.4, D26). `--now` splits the running recording through the socket; otherwise the cut is made in the file, reading the spool directly like `mix`, so it works with the daemon down. Defaults to the most recent session, so `munin split 27:32` is the common case. |
+
+Exit codes are §11's, unchanged: 2 for a cut point that is not a time or a
+session that does not exist, 4 for a session in a state that cannot be split, a
+cut point outside the audio, or one already split, 1 for a cut that was
+attempted and failed, 3 only for `--now` with no daemon.
+
+**The audio cut.** `ffmpeg -ss <start> -i <track> [-t <length>] -c copy`, one
+run per track per piece, into `<name>.part` and renamed on success. A stream
+copy, so nothing is re-encoded and a two-hour session cuts in about a second;
+the consequence is that a half's `duration_seconds` is the *intended* length and
+the file may differ by up to one Opus packet (20 ms). Measured against the
+synthetic fixture, the halves land within 0.1 s of their planned lengths. The
+cut point counts captured audio, not wall clock, so a resumed session's gap
+takes no time — the same axis §10 gives the renderer and the mix. `--clock`
+converts a time of day into that axis using the segments' own timestamps.
+
+**Two axes meet at every segment boundary, and they disagree.** A segment's
+`started_at` is stamped before the encoders are up, so its wall-clock span runs
+a fraction of a second longer than its `duration_seconds`. Every piece therefore
+carries its audio length explicitly rather than deriving it from its two
+timestamps — the halves have to sum to the parent on the axis the transcript
+uses — and a cut that lands within 0.25 s of a segment's edge is snapped to the
+edge. Without the snap, ordinary input (a `--clock` on a segment's start minute,
+an offset typed from a duration `munin list` rounded to the second) asks ffmpeg
+for a piece of a millisecond, which writes a zero-byte file and fails the whole
+split. A cut that snaps onto the recording's own start or end is refused
+instead: a half with no audio in it is not a meeting.
+
+**A session recovered after a crash is measured before it is cut.** Recovery
+(spec §11) writes no `duration_seconds` and sets `stopped_at` to the moment the
+*next* daemon started, so its wall-clock span can be hours wider than its audio.
+Segment lengths are never inferred from the clock; a missing one is measured
+with `ffprobe` and used in memory only, and the parent's record is left exactly
+as the daemon wrote it.
+
+**Ids.** Both halves are named by §2's rules, from their own start minute and
+title. Part 1 keeps the parent's title and starts in the parent's minute, so the
+id it wants is the one the parent holds and it takes the `-2` collision suffix —
+an id artefact, not a part number, which is why `munin split` prints `part 1` and
+`part 2` in front of the ids it made.
+
+**Ordering, so an interrupted split cannot lose a meeting.** Each half's
+*directory* is filled and checksummed first; then the parent is moved to
+`split`; then each half's `session.json` is written and linked into `inbox/`,
+and the parent is unlinked. **A directory without a `session.json` is not a
+session** to anything that reads this store — `iter_sessions` skips it — so
+until the parent is claimed there is nothing for `munin-work` to find and
+nothing a rollback can delete out from under it. `Spool.derive` therefore
+returns an *unsaved* session, which is the one place in the spool where that is
+true and is why it is spelled out here. A failure anywhere before the parent
+moves leaves it `captured` (or `pending`) and queued, and removes the
+half-written directories. A second `munin split` on a parent already in `split`
+is refused and names the two sessions it produced.
+
+The parent's move is a compare-and-swap against the state *on disk*, not the one
+the CLI read when it started: `munin-work` sweeps every 5 s and `munin start
+--resume` can take a captured session back to `recording` (§4, D15), and a cut
+of a long meeting takes about a second. Losing that race removes the halves and
+leaves the parent exactly as the other process left it — two halves queued *and*
+a resumed parent would be the original problem twice over. What remains
+unprotected is only a failure *after* the parent has moved (a disk that fills
+while the two small JSON files are written): the audio and the parent's record
+survive, and the halves are directories on disk waiting for a `session.json`
+that has to be written by hand.
+
+The daemon's own provenance write takes the closed session's lock and re-reads
+inside it, for the same reason: the worker may have claimed it (`captured ->
+pending`) in the milliseconds since it was captured, and writing back a snapshot
+from before that would roll its state and its history row off the record.
+
+**Counterargument, and it is a real one.** This makes the CLI a writer of
+session state, which §4 had kept to two daemons, and it doubles the audio on
+disk for every split. The alternative considered was cutting the parent in place
+— cheaper, and one record instead of three — and it was rejected because the
+`checksums` field then describes a file the user no longer has, which is the
+only integrity claim the session store makes (§12). The narrower alternative, a
+`munin-work`-owned split, was rejected because the worker has no user in front
+of it and a split is a judgement about what a meeting *was*.
+
+**Not verified.** A real meeting application renaming its own window mid-call
+(the false-positive path: synthetic evidence only, spec §14 item 13); a live
+split during an actual Teams call, where the sub-second gap between closing one
+capture and opening the next meets a real private sink and its loopback (§16.6);
+and the interaction with `calendar_event_id` at M9, where both halves would
+inherit one id and §11's duplicate-capture rule would read them as duplicates
+(spec §14 item 14).

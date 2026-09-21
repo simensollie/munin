@@ -32,7 +32,9 @@ var STATES = ["idle", "detected", "recording", "ending",
 // is captured, safe and waiting for a backend. It is not a bar state (the
 // daemon publishes it as `captured`), and it is emphatically not `failed` --
 // mapping it there painted a red alert on every recording in the PoC.
-var SESSION_STATES = STATES.concat(["pending"]);
+// `split` (D26) is here for the same reason: a state missing from this list
+// arrives at the widget as "unknown", which is rendered exactly like a failure.
+var SESSION_STATES = STATES.concat(["pending", "split"]);
 
 // Persistent audio identity, shared by the bar, panel and saved sessions.
 // Level bars rather than a waveform: at the bar's 13 px icon font a waveform
@@ -448,10 +450,22 @@ function primaryAction(state) {
 // "Stop and transcribe" (contracts 8) -- so *Keep recording* has to be here.
 // `munin event call-started` is what cancels the grace period; `start --resume`
 // is not it, because the session is still recording.
+//
+// While recording, the slot goes to *Split here* (D26): the daemon only offers
+// a split when it saw a second call go live, and the user walking from one
+// meeting into the next is often the only one who knows. A notification can be
+// missed; the panel cannot. During the grace period *Keep recording* wins the
+// slot -- it is the contracted action, and the split prompt that matters there
+// arrives as its own notification.
 function secondaryAction(state) {
-    if (String(state || "idle") === "ending")
+    switch (String(state || "idle")) {
+    case "ending":
         return { label: "Keep recording", argv: ["munin", "event", "call-started"] };
-    return null;
+    case "recording":
+        return { label: "Split here", argv: ["munin", "split", "--now"] };
+    default:
+        return null;
+    }
 }
 
 // Seconds of D15's resume window still open after the last capture, or -1
@@ -542,7 +556,11 @@ function sessionGlyph(state) {
     switch (String(state || "")) {
     case "recording":
     case "ending": return GLYPH;
-    case "done": return GLYPH_DONE;
+    case "done":
+    // A split parent (D26) is settled, not queued: its two halves carry the
+    // work now. Left on the waiting glyph it would read as a session the
+    // worker still owes the user a transcript for.
+    case "split": return GLYPH_DONE;
     case "failed":
     case "unknown": return GLYPH_FAILED;
     case "transcribing": return GLYPH_WORKING;
@@ -561,6 +579,7 @@ function sessionMeta(session) {
     if (session.duration_seconds > 0) parts.push(formatDuration(session.duration_seconds));
     if (session.pending_reason) parts.push(session.pending_reason);
     else if (session.state === "failed") parts.push("audio kept");
+    else if (session.state === "split") parts.push("split in two");
     return parts.join(" · ");
 }
 

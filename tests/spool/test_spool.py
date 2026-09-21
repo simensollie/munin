@@ -35,6 +35,7 @@ from .conftest import WHEN, with_resume_window
 
 REC = "munin-rec"
 WORK = "munin-work"
+CLI = "munin"
 
 
 def advance(session: Session, *states: str) -> Session:
@@ -779,4 +780,13 @@ def test_every_state_is_reachable_and_every_transition_is_between_states() -> No
     for (source, target), writer in TRANSITIONS.items():
         assert source is None or source in STATES
         assert target in STATES
-        assert writer in {REC, WORK}
+        # D26: ``munin`` joins the two daemons as a writer. It writes only the
+        # states that belong to a session nobody is capturing -- the split
+        # parent, and the derived halves at their birth.
+        assert writer in {REC, WORK, CLI}
+        if writer == CLI:
+            assert (source, target) in {
+                (None, "captured"),
+                ("captured", "split"),
+                ("pending", "split"),
+            }

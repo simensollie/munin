@@ -64,6 +64,12 @@ POLL_INTERVAL = 1.0
 #: the plugin from ``started_at``; no timer writes a *changing* field here.
 HEARTBEAT_SECONDS = 30.0
 
+#: How much recording has to exist before a split can take a meeting off it.
+#: A notification clicked twice, or a keybind pressed twice, is the reason this
+#: is not zero: the second click would otherwise leave a session of a second or
+#: two behind, with a directory, a record and an inbox entry of its own.
+MIN_SPLIT_SECONDS = 5.0
+
 #: How often a live capture's tracks are checked for a process that has died.
 #: Cheap by construction -- :meth:`Capturer.failed_tracks` spawns nothing -- but
 #: there is no point asking more often than a track can plausibly fail.
@@ -323,6 +329,14 @@ class Daemon:
         self.capturer: Capturer | None = None
         self._segment_index = 0
         self._detected: dict[str, Any] | None = None
+        #: A *different* call seen while this one is being recorded (D26). Held
+        #: aside rather than written over ``_detected``, which describes the
+        #: meeting on the record; this is only a candidate until the user says
+        #: it is a meeting of its own.
+        self._pending_call: dict[str, Any] | None = None
+        #: Call keys already offered as a split for this session, so the 5 s
+        #: detection poll asks once rather than every sweep.
+        self._split_offered: set[tuple[Any, ...]] = set()
         self._playback_handle: str | None = None
         self._ending_since: datetime | None = None
         self._warned = False
@@ -368,6 +382,7 @@ class Daemon:
             "status": self.handle_status,
             "start": self.handle_start,
             "stop": self.handle_stop,
+            "split": self.handle_split,
             "toggle": self.handle_toggle,
             "event": self.handle_event,
             "list": self.handle_list,
@@ -473,6 +488,10 @@ class Daemon:
         self.state.last_error = None
         self._ending_since = None
         self._warned = False
+        # Whatever was offered as a split belongs to the session that just
+        # ended; this one has been asked nothing yet.
+        self._split_offered = set()
+        self._pending_call = None
         self._write_state()
         self._warn_if_capture_widened(capturer, app)
         log.info(
@@ -488,6 +507,160 @@ class Daemon:
         if not self.is_recording:
             raise IpcError("not_recording", "nothing is being recorded")
         return self._finish(auto=False)
+
+    def handle_split(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Finish the running recording here and start the next one (D26).
+
+        The cheap half of the split: the boundary is now, so there is no audio
+        to cut. One meeting is closed exactly as ``stop`` would close it -- same
+        checksums, same inbox link, same worker path -- and the next is opened
+        with whatever the detector has since seen, which is usually the call
+        that triggered the prompt.
+
+        Between the two there is a gap of well under a second, in which nothing
+        is captured. That is the honest cost of the design: two encoders on one
+        source, overlapping, would cost a good deal more than the half-sentence
+        spoken while the user walks between meetings.
+        """
+        title = args.get("title")
+        if title is not None and not isinstance(title, str):
+            raise IpcError("bad_request", "title must be a string")
+        if not self.is_recording:
+            raise IpcError("not_recording", "nothing is being recorded")
+        # A notification clicked twice, or a keybind pressed twice, would
+        # otherwise leave a session of a second or two behind between the two
+        # meetings -- a directory, a record and an inbox entry for nothing.
+        elapsed = self._seconds_recording()
+        if elapsed is not None and elapsed < MIN_SPLIT_SECONDS:
+            raise IpcError(
+                "too_soon",
+                f"this recording is {int(elapsed)} s old; there is nothing to "
+                "split off yet",
+            )
+
+        closed_id = getattr(self.session, "id", None)
+        pending = self._pending_call
+        finished = self._finish(
+            auto=False,
+            reason="split",
+            note="split here: a new meeting was detected while recording",
+        )
+
+        # The next meeting is the call that prompted the split, if there was
+        # one. Promoting it now is what makes the new session carry the right
+        # application on its record rather than the one that has just ended.
+        if pending is not None:
+            self._detected = pending
+            self.state.detected_app = {
+                "app_id": pending.get("app_id"),
+                "label": pending.get("label"),
+                "pid": pending.get("pid"),
+            }
+        self._pending_call = None
+
+        try:
+            started = self.handle_start(
+                {"title": title, "from_detection": pending is not None}
+            )
+        except IpcError as exc:
+            # The first meeting is already captured and queued; only the second
+            # recording failed to start. Say both halves of that, because "split
+            # failed" would read as "the last hour is gone".
+            log.error(
+                "split closed session=%s but could not start the next one: %s",
+                closed_id,
+                exc,
+            )
+            raise IpcError(
+                exc.code,
+                f"{exc.message}; {closed_id} was saved, but the next recording "
+                "did not start",
+            ) from exc
+
+        opened_id = started.get("session_id")
+        self._carry_app_onto(started.get("session_id"))
+        self._link_split(closed_id, opened_id)
+        payload = dict(started)
+        payload["closed"] = finished.get("session")
+        payload["closed_id"] = closed_id
+        payload["closed_duration_seconds"] = finished.get("duration_seconds")
+        log.info("split session=%s into %s", closed_id, opened_id)
+        return payload
+
+    def _seconds_recording(self) -> float | None:
+        """How long the current stretch has been running, or ``None``."""
+        started = self.state.started_at
+        if started is None:
+            return None
+        return max(0.0, (self.clock() - started).total_seconds())
+
+    def _carry_app_onto(self, opened_id: str | None) -> None:
+        """Put the live call on the new session's record when nothing named it.
+
+        A split made from the panel rather than from a prompt has no *new* call
+        behind it, so ``_create`` writes no ``app`` -- but the daemon is still
+        bound to the application it was recording, and the capturer is about to
+        take that application's audio. ``session.json`` has to say which
+        application the app track holds; the alternative is a record that claims
+        less than the capture does (spec 12).
+        """
+        if opened_id is None or self.session is None:
+            return
+        if getattr(self.session, "app", None) or self._detected is None:
+            return
+        detected = self._detected
+        try:
+            self.session.update(
+                app={
+                    "app_id": detected.get("app_id"),
+                    "label": detected.get("label"),
+                    "matched_by": detected.get("matched_by"),
+                    "pid": detected.get("pid"),
+                    "client_name": detected.get("client_name"),
+                    "binary": detected.get("binary"),
+                    "window_class": detected.get("window_class"),
+                    "window_title": detected.get("window_title"),
+                }
+            )
+        except Exception as exc:  # noqa: BLE001 - the recording is not at risk
+            log.warning("could not record the application on session=%s error=%s",
+                        opened_id, exc)
+
+    def _link_split(self, closed_id: str | None, opened_id: str | None) -> None:
+        """Write the provenance both ways, without failing the split over it.
+
+        Both recordings are already safe by the time this runs, so a store that
+        refuses the link is a legible warning rather than an error the user can
+        act on. The ``history[]`` rows on both sessions already carry the note;
+        these two fields are what makes the pair machine-readable (spec 12).
+        """
+        if opened_id is None or closed_id is None:
+            return
+        try:
+            closed = self.spool.load(closed_id)
+            # Under the session's own lock, and re-read inside it: the worker
+            # may have claimed this session (captured -> pending) in the
+            # milliseconds since it was captured, and writing a snapshot from
+            # before that would roll its state and its history row back.
+            with closed.lock():
+                fresh = closed.reload()
+                fresh.split_into = [opened_id]
+                fresh.save()
+        except Exception as exc:  # noqa: BLE001 - the audio is not at risk
+            log.warning("could not record the split on session=%s error=%s", closed_id, exc)
+        if self.session is None:
+            return
+        try:
+            self.session.update(
+                split_from={
+                    "session": closed_id,
+                    "kind": "live",
+                    "part": 2,
+                    "offset_seconds": None,
+                }
+            )
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not record the split on session=%s error=%s", opened_id, exc)
 
     def handle_toggle(self, args: dict[str, Any]) -> dict[str, Any]:
         if self.is_recording:
@@ -561,10 +734,15 @@ class Daemon:
             detected["window_title"] = title
 
         if self.state.state == "ending":
-            # The stream came back, or the user chose "Keep recording".
+            # The stream came back, or the user chose "Keep recording" -- or the
+            # next meeting started inside the grace period, which looks exactly
+            # the same from here and is the commonest way two meetings end up in
+            # one file. Keep recording either way (never lose audio), then ask.
             self._cancel_grace()
+            self._offer_split(detected)
             return True
         if self.is_recording:
+            self._offer_split(detected)
             return True
 
         first_sighting = self._detected is None or self._detected.get("pid") != pid
@@ -587,8 +765,95 @@ class Daemon:
         log.info("call detected pid=%s app=%s", pid, detected["label"])
         return True
 
+    def _most_interesting(self, identified: list[Any]) -> Any:
+        """Which live call the poller should report, when there is more than one.
+
+        Normally the first, which is what a single call has always meant. While
+        recording, the D26 case is precisely *two* calls live at once -- the
+        meeting being recorded and the one the user has just joined -- and the
+        scan returns them in PipeWire's order, not in the order they started.
+        Reporting the first would report the meeting already on the record, over
+        and over, and the second meeting would never be seen at all.
+        """
+        current = self._call_key(self._detected)
+        if current is None or not self.is_recording:
+            return identified[0]
+        for call in identified:
+            window = getattr(call, "window", None)
+            key = (
+                getattr(call.evidence, "pid", None),
+                getattr(window, "title", None) if window else None,
+            )
+            if key != current:
+                return call
+        return identified[0]
+
+    def _call_key(self, detected: dict[str, Any] | None) -> tuple[Any, ...] | None:
+        """What makes one call distinguishable from the next, or ``None``.
+
+        ``(pid, window_title)``, because neither alone is enough: two
+        consecutive meetings in the same Teams client share a pid and differ
+        only in the title, and two tabs differ in pid while the title may be
+        generic. A key is only formed for evidence that carries a pid -- the
+        panel's *Keep recording* button sends a bare ``munin event
+        call-started`` with no pid, and that is an answer about this meeting,
+        never the announcement of another one.
+        """
+        if not detected or detected.get("pid") is None:
+            return None
+        return (detected.get("pid"), detected.get("window_title"))
+
+    def _offer_split(self, detected: dict[str, Any]) -> bool:
+        """D26: a different call went live mid-recording. Suggest, never act.
+
+        The daemon keeps recording and sends one notification per distinct call;
+        the split happens only if the user clicks it (D4). The risk taken
+        deliberately: a meeting application that rewrites its own window title
+        mid-call -- Teams does, when screen sharing starts -- reads as a new
+        call here and costs the user one prompt they dismiss. The reverse error
+        is the expensive one, so the false positive is the one to have.
+        """
+        session_key = self._call_key(self._detected)
+        incoming = self._call_key(detected)
+        if incoming is None or session_key is None:
+            # An ad-hoc recording nobody identified an application for: a call
+            # going live during it is at least as likely to be the meeting being
+            # joined late as a second one, and there is nothing to compare it
+            # with. ``on_call_ended`` declines the mirror case for the same
+            # reason.
+            return False
+        if incoming == session_key or incoming in self._split_offered:
+            return False
+        self._split_offered.add(incoming)
+        self._pending_call = detected
+        log.info(
+            "a different call went live while recording session=%s pid=%s app=%s",
+            self.state.session_id,
+            detected.get("pid"),
+            detected.get("label"),
+        )
+        self.notifier(
+            notify.new_meeting(
+                detected["label"],
+                self.clock().strftime("%H:%M"),
+                session_id=self.state.session_id,
+            )
+        )
+        return True
+
     def on_call_ended(self, *, pid: int | None = None) -> bool:
         """The app's streams disappeared. Starts the grace period if recording."""
+        if (
+            pid is not None
+            and self._pending_call is not None
+            and self._pending_call.get("pid") == pid
+        ):
+            # The meeting that was offered as a split has gone. Keeping it would
+            # mean a later click bound the new session to a dead application:
+            # the record would name it and the capturer would fall back to the
+            # desktop mix, which is the mismatch spec 12 cares about.
+            log.info("the call offered as a split ended pid=%s", pid)
+            self._pending_call = None
         if self.is_recording and self.state.state == "recording":
             session_pid = (self.state.detected_app or {}).get("pid")
             if session_pid is None:
@@ -623,6 +888,8 @@ class Daemon:
     def _forget_detected(self) -> None:
         """Drop every trace of the call the daemon was watching."""
         self._detected = None
+        self._pending_call = None
+        self._split_offered = set()
         self._playback_handle = None
         self.state.detected_app = None
 
@@ -767,7 +1034,7 @@ class Daemon:
             return
         identified = [call for call in calls if call.identity is not None]
         if identified:
-            call = identified[0]
+            call = self._most_interesting(identified)
             self.on_call_started(
                 pid=call.evidence.pid,
                 app=call.identity.label,
@@ -1057,7 +1324,9 @@ class Daemon:
             log.warning("could not look for a resumable session error=%s", exc)
             return None
 
-    def _finish(self, *, auto: bool, reason: str = "") -> dict[str, Any]:
+    def _finish(
+        self, *, auto: bool, reason: str = "", note: str | None = None
+    ) -> dict[str, Any]:
         session = self.session
         capturer = self.capturer
         assert session is not None
@@ -1104,7 +1373,7 @@ class Daemon:
             raise IpcError("capture_failed", failure)
 
         session.checksums = self._checksums(session)
-        self._transition(session, "captured")
+        self._transition(session, "captured", note=note)
         try:
             self.spool.link_inbox(session)
         except Exception as exc:  # noqa: BLE001 - the inbox is an index, not the record
@@ -1225,8 +1494,8 @@ class Daemon:
         self.state.last_error = message
         self._write_state()
 
-    def _transition(self, session: Any, to: str) -> None:
-        session.transition(to, by="munin-rec")
+    def _transition(self, session: Any, to: str, *, note: str | None = None) -> None:
+        session.transition(to, by="munin-rec", note=note)
 
     def _save(self, session: Any) -> None:
         try:

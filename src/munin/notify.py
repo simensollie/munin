@@ -26,6 +26,7 @@ __all__ = [
     "SENDER",
     "Notification",
     "detected",
+    "new_meeting",
     "ending_soon",
     "auto_stopped",
     "track_failed",
@@ -90,6 +91,32 @@ def detected(app_label: str, when: str, *, session_id: str | None = None) -> Not
         action=("munin", "start", "--from-detection"),
         urgency="normal",
         timeout_ms=30000,
+        replaces_id=replace_id_for(session_id),
+    )
+
+
+def new_meeting(
+    app_label: str, when: str, *, session_id: str | None = None
+) -> Notification:
+    """A *different* call went live while a recording was running (D26).
+
+    A start-shaped decision, so it follows D4: the daemon keeps recording and
+    asks. Doing nothing means "same meeting", which is the safe reading -- a
+    split that should not have happened costs two records to merge by hand,
+    while an unsplit pair costs one transcript that mixes two meetings' speakers
+    and two customers' talk (spec 12).
+
+    The wrapper carries one action, so *Same meeting* is the dismiss and lives
+    in the panel, the way *Not this one* does for a detection prompt. The
+    timeout matches :func:`ending_soon`: the user is walking between meetings
+    and needs longer than a glance to answer.
+    """
+    return Notification(
+        title="New meeting detected",
+        body=f"{app_label} call, {when}, while recording. Click to split here.",
+        action=("munin", "split", "--now"),
+        urgency="normal",
+        timeout_ms=60000,
         replaces_id=replace_id_for(session_id),
     )
 

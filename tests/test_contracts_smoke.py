@@ -18,7 +18,7 @@ from munin.capture import get_capturer, segment_filenames
 from munin.capture.base import Capturer
 from munin.detect import get_detector, identify
 from munin.detect.base import AppRule, CallEvidence, Detector, WindowInfo
-from munin.spool import TRANSITIONS
+from munin.spool import STATES, TERMINAL, TRANSITIONS
 
 
 def test_version() -> None:
@@ -110,12 +110,53 @@ def test_none_backend_leaves_a_reason() -> None:
 
 
 def test_state_machine_ownership() -> None:
-    """Spec 11: after ``captured``, only the worker writes state."""
+    """Spec 11: after ``captured``, only the worker writes state.
+
+    D26 adds the one exception, and it is deliberately narrow: a session
+    *derived* from another one (a split half) enters the table at
+    ``(None, captured)``, written by ``munin``. Nothing was captured, so
+    ``munin-rec`` has nothing to say about it; the audio was already finished
+    when the CLI cut it out.
+    """
     for (src, dst), writer in TRANSITIONS.items():
         if dst in {"pending", "transcribing", "done"}:
             assert writer == "munin-work", (src, dst, writer)
-        if dst in {"ending", "captured"}:
+        if dst == "ending":
             assert writer == "munin-rec", (src, dst, writer)
+        if dst == "captured":
+            expected = "munin" if src is None else "munin-rec"
+            assert writer == expected, (src, dst, writer)
+        if dst == "split":
+            assert writer == "munin", (src, dst, writer)
+
+
+def test_nothing_leaves_a_terminal_state() -> None:
+    """``done``, ``failed`` and ``split`` are where a session stops."""
+    assert TERMINAL <= set(STATES)
+    for source, target in TRANSITIONS:
+        assert source not in TERMINAL, (source, target)
+
+
+def test_a_split_parent_is_not_work_the_worker_can_see(
+    munin_home: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """D26: the point of the state. A session cut in two must not also be
+    transcribed as one, and the worker finds work by scanning the spool."""
+    from munin import config as config_module
+    from munin.spool import Spool
+
+    spool = Spool(config_module.load())
+    session = spool.create(title="Weekly quality sync", source="adhoc")
+    spool.add_segment(session, 1)
+    session.transition("captured", by="munin-rec")
+    spool.link_inbox(session)
+    assert session.id in [s.id for s in spool.pending_sessions()]
+
+    session.transition("split", by="munin", split_into=["a", "b"])
+    spool.unlink_inbox(session)
+
+    assert session.id not in [s.id for s in spool.pending_sessions()]
+    assert spool.inbox_ids() == []
 
 
 def test_munin_home_fixture_is_isolated(munin_home: Path) -> None:
