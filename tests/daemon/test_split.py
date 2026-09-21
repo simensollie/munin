@@ -11,6 +11,8 @@ The other half of D26, cutting a session that was already captured, is
 
 from __future__ import annotations
 
+import logging
+
 from dataclasses import replace
 from datetime import datetime
 
@@ -138,6 +140,39 @@ def test_a_title_change_alone_is_enough_to_ask(harness: Harness) -> None:
     daemon.handle_event(dict(FIRST, title="Supplier audit follow-up | Beacon 365"))
 
     assert harness.titles() == ["New meeting detected"]
+
+
+def test_a_same_pid_rename_is_logged_for_the_open_question(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """OQ13 is "how often does an application rename its own window mid-call",
+    and nothing has ever counted it. The prompt is unchanged -- the false
+    positive is still the error worth having -- but the case now leaves a line
+    behind, so a week of real meetings answers the question.
+    """
+    _record_first_meeting(harness)
+
+    with caplog.at_level(logging.INFO, logger="munin.daemon"):
+        harness.daemon.handle_event(dict(FIRST, title="Screen sharing | Beacon 365"))
+
+    assert harness.titles() == ["New meeting detected"]
+    logged = [r.getMessage() for r in caplog.records if "renamed or next meeting" in r.getMessage()]
+    assert len(logged) == 1
+    assert "Screen sharing" in logged[0]
+
+
+def test_a_different_pid_is_not_logged_as_a_rename(
+    harness: Harness, caplog: pytest.LogCaptureFixture
+) -> None:
+    """A second client is a second call, not a renamed window; counting it would
+    make the OQ13 tally useless."""
+    _record_first_meeting(harness)
+
+    with caplog.at_level(logging.INFO, logger="munin.daemon"):
+        harness.daemon.handle_event(dict(SECOND))
+
+    assert harness.titles() == ["New meeting detected"]
+    assert not [r for r in caplog.records if "renamed or next meeting" in r.getMessage()]
 
 
 def test_the_panels_keep_recording_button_never_offers_a_split(

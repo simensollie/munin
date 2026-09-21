@@ -18,7 +18,7 @@ suite. The PoC ships the `none` backend, so sessions capture and then stay
 ./install.sh --dry-run          # read the seven steps before running them
 ./install.sh                    # install; never runs sudo
 ~/.local/share/munin/venv/bin/python -m pytest
-munin doctor                    # 24 checks
+munin doctor                    # 25 checks
 ```
 
 `tools/render-sketches.py` regenerates `docs/design/sketches/*.jpg` from

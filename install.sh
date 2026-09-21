@@ -62,6 +62,13 @@ BAR_ANCHOR="omarchy.weather"
 KEYBIND_KEYS="SUPER + SHIFT + R"
 KEYBIND_DESC="Record meeting"
 KEYBIND_CMD="munin toggle"
+# The split (D26) gets the record binding plus CTRL: the two are the same
+# gesture at the same moment -- you are at a meeting boundary either way -- and
+# a notification that has to be caught within a minute is not the only way in.
+# The panel button covers the same ground for a mouse.
+SPLIT_KEYBIND_KEYS="SUPER + CTRL + SHIFT + R"
+SPLIT_KEYBIND_DESC="Split meeting here"
+SPLIT_KEYBIND_CMD="munin split --now"
 MARK_BEGIN="-- >>> munin (managed by munin install.sh) >>>"
 MARK_END="-- <<< munin (managed by munin install.sh) <<<"
 
@@ -173,6 +180,19 @@ run_append() {
     return 0
   fi
   cat >>"$path"
+}
+
+# Replace a file's contents with stdin, following a symlink like run_append.
+# Only ever fed a fully buffered string: writing through the link truncates it,
+# so a caller that streamed the same file into this would eat it.
+run_write() {
+  local path="$1"
+  if ((DRY_RUN)); then
+    printf '  would rewrite: %s\n' "$path"
+    cat >/dev/null
+    return 0
+  fi
+  cat >"$path"
 }
 
 have() { command -v "$1" >/dev/null 2>&1; }
@@ -417,8 +437,58 @@ resolve_bindings_target() {
 }
 
 key_bound_by_omarchy() {
+  local keys="$1"
   [[ -d $OMARCHY_DEFAULT_BINDINGS ]] || return 1
-  grep -rqF -e "\"$KEYBIND_KEYS\"" "$OMARCHY_DEFAULT_BINDINGS" 2>/dev/null
+  grep -rqF -e "\"$keys\"" "$OMARCHY_DEFAULT_BINDINGS" 2>/dev/null
+}
+
+# The managed block, markers included. One writer for both paths -- appending it
+# to a file that has none, and rewriting one that predates the split binding --
+# so the two cannot describe different keybindings.
+munin_block() {
+  printf '%s\n' "$MARK_BEGIN"
+  local keys
+  for keys in "$KEYBIND_KEYS" "$SPLIT_KEYBIND_KEYS"; do
+    if key_bound_by_omarchy "$keys"; then
+      printf 'hl.unbind("%s")\n' "$keys"
+    fi
+  done
+  printf 'o.bind("%s", "%s", "%s")\n' "$KEYBIND_KEYS" "$KEYBIND_DESC" "$KEYBIND_CMD"
+  printf 'o.bind("%s", "%s", "%s")\n' \
+    "$SPLIT_KEYBIND_KEYS" "$SPLIT_KEYBIND_DESC" "$SPLIT_KEYBIND_CMD"
+  printf '%s\n' "$MARK_END"
+}
+
+# Timestamped, and a fresh one every time the block is actually written: a
+# backup kept from an earlier install is a snapshot of a file edited many times
+# since, so restoring from it would revert somebody else's work.
+backup_bindings() {
+  local target="$1" backup
+  backup="$STATE_DIR/$(basename "$target").$(date +%Y-%m-%dT%H%M%S).bak"
+  run mkdir -p "$STATE_DIR"
+  run cp -p "$target" "$backup" || fail 5 "could not back up $target"
+  info "backed up $target -> $backup"
+}
+
+# Swap an older managed block for the current one, in place. Buffered whole
+# before anything is written: the file being read is the file being written.
+rewrite_munin_block() {
+  local target="$1" rebuilt line inblock=0
+  rebuilt="$(
+    while IFS= read -r line || [[ -n $line ]]; do
+      if [[ $line == "$MARK_BEGIN" ]]; then
+        inblock=1
+        munin_block
+        continue
+      fi
+      if [[ $line == "$MARK_END" ]]; then
+        inblock=0
+        continue
+      fi
+      ((inblock)) || printf '%s\n' "$line"
+    done <"$target"
+  )"
+  printf '%s\n' "$rebuilt" | run_write "$BINDINGS_LINK"
 }
 
 reload_hypr() {
@@ -438,7 +508,7 @@ reload_hypr() {
 }
 
 step_keybind() {
-  step 5 "Binding $KEYBIND_KEYS to '$KEYBIND_CMD'"
+  step 5 "Binding $KEYBIND_KEYS to '$KEYBIND_CMD' and $SPLIT_KEYBIND_KEYS to '$SPLIT_KEYBIND_CMD'"
   local target
   target="$(resolve_bindings_target)"
 
@@ -455,33 +525,35 @@ step_keybind() {
   fi
 
   if [[ -e $target ]] && grep -qF -e "$MARK_BEGIN" "$target" 2>/dev/null; then
-    info "the munin block is already present; left unchanged"
+    if grep -qF -e "\"$SPLIT_KEYBIND_KEYS\"" "$target" 2>/dev/null; then
+      info "the munin block is already present; left unchanged"
+      reload_hypr
+      return 0
+    fi
+    # An install from before the split binding existed. The block is ours and
+    # it is one binding short, so it is rewritten rather than appended to --
+    # two munin blocks in one file is how a keybinding ends up bound twice.
+    backup_bindings "$target" || return 1
+    rewrite_munin_block "$target"
+    info "the munin block predates $SPLIT_KEYBIND_KEYS; rewrote it with both bindings"
     reload_hypr
     return 0
   fi
 
-  if [[ -e $target ]] && grep -qF -e "\"$KEYBIND_KEYS\"" "$target" 2>/dev/null; then
-    warn "$KEYBIND_KEYS is already bound in $target; not touching it"
-    warn "bind it yourself with: o.bind(\"$KEYBIND_KEYS\", \"$KEYBIND_DESC\", \"$KEYBIND_CMD\")"
-    return 0
-  fi
+  local keys
+  for keys in "$KEYBIND_KEYS" "$SPLIT_KEYBIND_KEYS"; do
+    if [[ -e $target ]] && grep -qF -e "\"$keys\"" "$target" 2>/dev/null; then
+      warn "$keys is already bound in $target; not touching it"
+      warn "bind munin yourself with the two o.bind lines in install.sh"
+      return 0
+    fi
+  done
 
-  # Timestamped, and a fresh one every time the block is actually added: a
-  # backup kept from an earlier install is a snapshot of a file edited many
-  # times since, so restoring from it would revert somebody else's work.
-  local backup
-  backup="$STATE_DIR/$(basename "$target").$(date +%Y-%m-%dT%H%M%S).bak"
-  run mkdir -p "$STATE_DIR"
-  run cp -p "$target" "$backup" || fail 5 "could not back up $target"
-  info "backed up $target -> $backup"
+  backup_bindings "$target" || return 1
 
   {
-    printf '\n%s\n' "$MARK_BEGIN"
-    if key_bound_by_omarchy; then
-      printf 'hl.unbind("%s")\n' "$KEYBIND_KEYS"
-    fi
-    printf 'o.bind("%s", "%s", "%s")\n' "$KEYBIND_KEYS" "$KEYBIND_DESC" "$KEYBIND_CMD"
-    printf '%s\n' "$MARK_END"
+    printf '\n'
+    munin_block
   } | run_append "$BINDINGS_LINK"
   info "appended the munin keybind block through $BINDINGS_LINK"
 

@@ -141,6 +141,65 @@ def test_missing_runtime_dir_is_a_failure(machine: FakeMachine) -> None:
     assert checks["daemon"].status == "fail"
 
 
+def test_both_keybindings_are_reported(installed: FakeMachine) -> None:
+    checks = _run(installed)
+    assert checks["keybind"].status == "ok"
+    assert "SUPER + SHIFT + R -> munin toggle" in checks["keybind"].detail
+    assert "SUPER + CTRL + SHIFT + R -> munin split --now" in checks["keybind"].detail
+
+
+def test_a_block_missing_the_split_binding_warns(installed: FakeMachine) -> None:
+    """What an install from before D26 looks like: the record key works, so this
+    is a warning naming the missing one, not a failure."""
+    text = installed.bindings_target.read_text(encoding="utf-8")
+    kept = [
+        line
+        for line in text.splitlines()
+        if '"SUPER + CTRL + SHIFT + R"' not in line
+    ]
+    installed.bindings_target.write_text("\n".join(kept) + "\n", encoding="utf-8")
+
+    checks = _run(installed)
+
+    assert checks["keybind"].status == "warn"
+    assert "SUPER + CTRL + SHIFT + R missing" in checks["keybind"].detail
+    assert "re-run install.sh" in checks["keybind"].detail
+
+
+# --- orphaned session directories (D26) ------------------------------------
+
+
+def test_no_orphans_on_a_clean_machine(installed: FakeMachine) -> None:
+    checks = _run(installed)
+    assert checks["orphan sessions"].status == "ok"
+
+
+def test_audio_without_a_record_is_reported(installed: FakeMachine) -> None:
+    """The residue of a split that died between filling a half's directory and
+    writing its record: real meeting audio no munin command can see.
+    """
+    orphan = installed.data_home / "recordings" / "2026" / "09" / "2026-09-21T0903-orphan"
+    orphan.mkdir(parents=True)
+    (orphan / "mic.opus").write_bytes(b"not really opus")
+
+    checks = _run(installed)
+
+    assert checks["orphan sessions"].status == "warn"
+    assert "2026-09-21T0903-orphan" in checks["orphan sessions"].detail
+    assert "no session.json" in checks["orphan sessions"].detail
+
+
+def test_a_whole_session_is_not_an_orphan(installed: FakeMachine) -> None:
+    whole = installed.data_home / "recordings" / "2026" / "09" / "2026-09-21T0903-whole"
+    whole.mkdir(parents=True)
+    (whole / "mic.opus").write_bytes(b"not really opus")
+    (whole / "session.json").write_text("{}", encoding="utf-8")
+
+    checks = _run(installed)
+
+    assert checks["orphan sessions"].status == "ok"
+
+
 def test_a_double_binding_is_a_failure(installed: FakeMachine) -> None:
     with installed.bindings_target.open("a", encoding="utf-8") as handle:
         handle.write('o.bind("SUPER + SHIFT + R", "Something else", "other")\n')

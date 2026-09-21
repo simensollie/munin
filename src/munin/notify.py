@@ -106,10 +106,16 @@ def new_meeting(
     while an unsplit pair costs one transcript that mixes two meetings' speakers
     and two customers' talk (spec 12).
 
-    The wrapper carries one action, so *Same meeting* is the dismiss and lives
-    in the panel, the way *Not this one* does for a detection prompt. The
-    timeout matches :func:`ending_soon`: the user is walking between meetings
-    and needs longer than a glance to answer.
+    The wrapper carries one action and it is the *yes*. There is no *Same
+    meeting* button, here or in the panel: declining is dismissing the
+    notification, or leaving it to time out, and a button that does what
+    ignoring the prompt does is one more thing to explain. The timeout matches
+    :func:`ending_soon`: the user is walking between meetings and needs longer
+    than a glance to answer.
+
+    The same *yes* is on the panel as *Split here* while recording, and on
+    ``SUPER + CTRL + SHIFT + R`` -- a notification can be missed, a keybind
+    cannot.
     """
     return Notification(
         title="New meeting detected",

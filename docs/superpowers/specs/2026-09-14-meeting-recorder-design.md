@@ -199,10 +199,17 @@ alongside rather than instead — a notification can be missed, a keybind cannot
 
 | When | Says | Actions |
 |---|---|---|
-| Call detected | Meeting detected, with title and attendee count from the calendar | Record · Not this one · Never for this meeting |
-| A different call goes live while recording (§6.4) | New meeting detected, while recording | Split here · Same meeting |
+| Call detected | Meeting detected, with title and attendee count from the calendar | Record (*Never for this meeting* is deferred to M9) |
+| A different call goes live while recording (§6.4) | New meeting detected, while recording | Split here |
 | Streams gone 1 min | Meeting looks finished, stops by itself at 2:00 | Stop and transcribe · Keep recording |
 | Auto-stopped | Recording stopped, *n* min captured, transcribing now | Resume · Open session |
+
+Each prompt carries one action, because `omarchy-notification-send` takes one
+`--exec`, and that action is always the *yes*. There is no *No* button anywhere
+and there deliberately is not: for a start-shaped prompt — recording, splitting —
+declining is doing nothing, and a button that does what ignoring the prompt does
+is a button that has to be explained. Dismiss the notification, or leave it to
+time out.
 
 The asymmetry is deliberate. Starting requires an explicit yes; stopping happens
 on a timer if nothing is said. A missed start prompt costs one recording; a

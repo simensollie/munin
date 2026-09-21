@@ -824,6 +824,23 @@ class Daemon:
             return False
         if incoming == session_key or incoming in self._split_offered:
             return False
+        if incoming[0] == session_key[0]:
+            # Same process, different title: either the user walked into the
+            # next meeting in the same client, or the application renamed its
+            # own window. Those are indistinguishable from here, and which one
+            # is common is spec 14's open question 13 -- unanswered because
+            # nothing has ever counted it on real hardware. This line is the
+            # counter: a week of `grep "renamed or next meeting" ~/munin/munin.log`
+            # against meetings the user remembers says whether the false
+            # positive is one stray prompt a month or one a meeting.
+            log.info(
+                "renamed or next meeting: same pid, new title session=%s pid=%s "
+                "from=%r to=%r",
+                self.state.session_id,
+                incoming[0],
+                session_key[1],
+                incoming[1],
+            )
         self._split_offered.add(incoming)
         self._pending_call = detected
         log.info(

@@ -55,6 +55,14 @@ PLUGIN_ID = "local.munin"
 UNIT_NAME = "munin.service"
 WORKER_UNIT_NAME = "munin-work.service"
 KEYBIND_KEYS = "SUPER + SHIFT + R"
+SPLIT_KEYBIND_KEYS = "SUPER + CTRL + SHIFT + R"
+#: What install.sh writes into the managed block, in its order. Keep the two in
+#: step: a binding here that install.sh does not write reads as a broken install
+#: on every machine.
+KEYBINDS: tuple[tuple[str, str], ...] = (
+    (KEYBIND_KEYS, "munin toggle"),
+    (SPLIT_KEYBIND_KEYS, "munin split --now"),
+)
 KEYBIND_MARK = "-- >>> munin (managed by munin install.sh) >>>"
 
 _TIMEOUT = 5.0
@@ -429,23 +437,43 @@ def check_keybind(env: DoctorEnv) -> CheckResult:
         text = target.read_text(encoding="utf-8")
     except OSError as exc:
         return CheckResult("keybind", "fail", f"{target}: {exc}")
-    binds = [
-        line.strip()
-        for line in text.splitlines()
-        if f'"{KEYBIND_KEYS}"' in line and line.lstrip().startswith("o.bind(")
-    ]
+    # Two bindings since the split (D26). The quoted form is what makes this
+    # safe to test by substring: `"SUPER + SHIFT + R"` does not occur inside
+    # `"SUPER + CTRL + SHIFT + R"`, so neither binding counts the other's line.
+    lines = [line.strip() for line in text.splitlines() if line.lstrip().startswith("o.bind(")]
+    found = {
+        keys: [line for line in lines if f'"{keys}"' in line]
+        for keys, _ in KEYBINDS
+    }
     where = str(target) if target != link else str(link)
-    if len(binds) > 1:
-        return CheckResult("keybind", "fail", f"{KEYBIND_KEYS} is bound {len(binds)} times in {where}")
-    if KEYBIND_MARK not in text:
-        if binds:
+    for keys, _ in KEYBINDS:
+        if len(found[keys]) > 1:
             return CheckResult(
-                "keybind", "warn", f"{KEYBIND_KEYS} is bound in {where} but not by munin"
+                "keybind", "fail", f"{keys} is bound {len(found[keys])} times in {where}"
+            )
+    bound = [keys for keys, _ in KEYBINDS if found[keys]]
+    if KEYBIND_MARK not in text:
+        if bound:
+            return CheckResult(
+                "keybind",
+                "warn",
+                f"{', '.join(bound)} bound in {where} but not by munin",
             )
         return CheckResult("keybind", "fail", f"no munin block in {where}")
-    if not binds:
+    missing = [keys for keys, _ in KEYBINDS if not found[keys]]
+    if missing == [keys for keys, _ in KEYBINDS]:
         return CheckResult("keybind", "fail", f"munin block in {where} has no o.bind line")
-    return CheckResult("keybind", "ok", f"{KEYBIND_KEYS} -> munin toggle ({where})")
+    if missing:
+        # An install that predates the second binding. Not a failure: what is
+        # bound works, and re-running install.sh rewrites the block.
+        return CheckResult(
+            "keybind",
+            "warn",
+            f"{', '.join(missing)} missing from the munin block in {where}"
+            " -- re-run install.sh",
+        )
+    detail = ", ".join(f"{keys} -> {command}" for keys, command in KEYBINDS)
+    return CheckResult("keybind", "ok", f"{detail} ({where})")
 
 
 def _unit_result(
@@ -652,6 +680,50 @@ def check_spool(env: DoctorEnv) -> CheckResult:
     return CheckResult("spool", status, summary)
 
 
+def check_orphans(env: DoctorEnv) -> CheckResult:
+    """Session directories holding audio with no ``session.json`` (D26).
+
+    Nothing else in munin can see one. The spool finds sessions by scanning for
+    ``session.json``, so a directory without one is invisible to ``munin list``,
+    to the worker, to the export and to whatever retention eventually becomes:
+    it is a real meeting's audio that no record describes, and it will sit there
+    until somebody looks with ``ls``.
+
+    They are produced by exactly one shape of failure. A split fills each half's
+    directory *before* writing its record, precisely so a half-copied session is
+    never claimed mid-cut, and rolls the directories back when the cut fails --
+    but a crash, a kill, or a full disk between those two steps leaves the
+    directory behind. This is the check that says so out loud.
+
+    A warning, not a failure: nothing is broken, and the audio is still there.
+    """
+    recordings = env.data_home / env.config.paths.recordings
+    if not recordings.is_dir():
+        return CheckResult("orphan sessions", "ok", f"{recordings} does not exist yet")
+    try:
+        # recordings/YYYY/MM/<session>/ -- spec 7.5.
+        orphans = [
+            directory
+            for directory in sorted(recordings.glob("*/*/*"))
+            if directory.is_dir()
+            and not (directory / "session.json").exists()
+            and any(directory.glob("*.opus"))
+        ]
+    except OSError as exc:  # a check never raises
+        return CheckResult("orphan sessions", "warn", f"{recordings} cannot be walked: {exc}")
+    if not orphans:
+        return CheckResult("orphan sessions", "ok", "none")
+    listed = ", ".join(directory.name for directory in orphans[:3])
+    if len(orphans) > 3:
+        listed += f", and {len(orphans) - 3} more"
+    return CheckResult(
+        "orphan sessions",
+        "warn",
+        f"{len(orphans)} with audio and no session.json ({listed}) under {recordings}"
+        " -- no munin command can see them; delete them or write the record by hand",
+    )
+
+
 def check_backend(env: DoctorEnv) -> CheckResult:
     backend = env.config.transcribe.backend
     if backend == "none":
@@ -714,6 +786,7 @@ CHECKS: tuple[Check, ...] = (
     Check("config", "all", check_config),
     Check("disk space", "all", check_disk),
     Check("spool", "all", check_spool),
+    Check("orphan sessions", "all", check_orphans),
     Check("transcription", "all", check_backend),
     Check("export", "all", check_export),
     Check("platform support", "all", check_platform_support),
