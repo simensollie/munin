@@ -27,6 +27,44 @@ The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
 
+### Amendment 2026-09-21 (exported once): additive
+
+Automating the copy made the folder current; it also made it refill itself. The
+2026-09-18 amendment left "the destination file existing is still the whole of
+the bookkeeping", which reads a missing file as *never exported* -- and deleting
+or moving the file is exactly how an upload ends. Upload a meeting, clear the
+file, and the next sweep put it straight back. Observed on this machine with
+eleven files in the folder.
+
+| Surface | Before | After |
+|---|---|---|
+| upload folder | the audio files only | plus `.exported/<session id>`, one marker per session it has carried |
+| `munin-work` | exports whenever the file is absent | exports once per session, ever |
+| `munin mix --all` | every finished session | every session the folder has not carried; `--force` overrides |
+| `munin mix <session>` | mixes and copies | unchanged: an explicit ask always runs, and re-marks |
+| `munin doctor` | names the folder | also counts what waits and what has been carried |
+
+The marker holds a timestamp and the filename it was written for, is named for
+the session alone (not the format, so changing `[export] format` does not
+re-export the archive), and is written only *after* a copy lands, so a failed
+export still retries.
+
+What did **not** change: nothing is written to `session.json` -- no field, no
+state transition, no history entry. Spec §10 sketched the other design
+(`munin mark-uploaded`, upload state in session metadata) and it stays rejected
+for that reason; the ledger sits in the folder it describes and is deleted with
+it (D25).
+
+Given up: self-healing. A copy deleted by accident no longer returns on the next
+sweep. `munin mix <session>` puts it back, which is the right way round -- a
+folder that recreates files you removed is the louder failure, and it is the one
+that actually happened.
+
+Additive: a folder with no `.exported/` behaves as before until the first sweep,
+which backfills a marker for every file already sitting there. Sessions whose
+files were cleared *before* this amendment are exported once more, then stay
+gone; `touch <folder>/.exported/<session id>` skips even that.
+
 ### Amendment 2026-09-18 (auto-export): additive
 
 The mix may now be produced automatically. Section 7.2 said it is written "never
@@ -300,8 +338,11 @@ demand by `munin mix` (spec §10) as `mixed.opus`, or `mixed.mp3` with
 sweep when `[export] enabled` is set. Either way it is deliberately *not* on the
 session record -- no field, no state transition, no history entry. A re-encode of audio
 that already exists is not a capture event, and the `history` list is the audit
-trail for what was captured. Its presence on disk is the whole of its
-bookkeeping. All of it is temporary (spec D25).
+trail for what was captured. Its bookkeeping is the filesystem: the file in the
+session directory, and one marker per session under
+`<upload folder>/.exported/`, which is what stops a copy deleted after its
+upload from being written again (amendment 2026-09-21). All of it is temporary
+(spec D25).
 
 **Why `app_source` is on the record.** The four values are not interchangeable.
 A `sink-monitor` track is the whole desktop mix: other applications, other

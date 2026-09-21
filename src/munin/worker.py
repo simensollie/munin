@@ -104,22 +104,44 @@ class Worker:
         observed failure mode was three meetings sitting unexported for a day
         with nothing to say so.
 
-        Idempotent, and deliberately so: a destination file that already exists
-        is the whole of the bookkeeping. Nothing is written to ``session.json``
-        -- no field, no state, no history row -- because a re-encode is not a
-        capture event (contracts section 7.2). That is also what makes a missed
-        export self-heal on the next sweep rather than needing a retry record.
+        Exported once, ever. A session is skipped when its file is still in the
+        folder *or* when the folder's ledger says it has already carried it
+        (``mixdown.LEDGER_DIRNAME``). Absence used to be the only test, which
+        made deleting a file you had just uploaded indistinguishable from never
+        having exported it: the next sweep put it straight back, and the folder
+        refilled itself behind you. Deleting or moving the file is how an upload
+        ends, so that has to stick.
+
+        Nothing is written to ``session.json`` -- no field, no state, no history
+        row -- because a re-encode is not a capture event (contracts section
+        7.2). The ledger lives in the upload folder instead, and goes when the
+        folder goes (D25).
+
+        What is given up is self-healing: a file deleted by accident no longer
+        comes back on the next sweep. ``munin mix <session> --force`` puts it
+        back deliberately, which is the right way round -- a folder that
+        recreates files you removed is the louder failure.
 
         Never raises. A failure here must not take munin-work down or stop a
-        transcript being written; it logs and the next sweep tries again.
+        transcript being written; it logs and the next sweep tries again. The
+        marker is written only after the copy lands, so a failed export still
+        retries.
         """
         if not self.config.export.enabled:
             return None
         if session.state in mixdown.BUSY_STATES:
             return None
         fmt = self.config.export.format
-        destination = self.config.export_dir / mixdown.export_filename(session.id, fmt)
+        export_dir = self.config.export_dir
+        destination = export_dir / mixdown.export_filename(session.id, fmt)
         if destination.exists():
+            # Backfill: the folder is carrying the file, so it has been
+            # exported, whether or not a marker was written at the time. This is
+            # what carries a folder filled before the ledger existed across the
+            # change without re-exporting everything in it once more.
+            self._mark_exported(session, destination)
+            return None
+        if mixdown.is_exported(export_dir, session.id):
             return None
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -131,6 +153,7 @@ class Worker:
         except (mixdown.MixdownError, OSError) as exc:
             log.warning("export failed for %s: %s", session.id, exc)
             return None
+        self._mark_exported(session, destination)
         log.info(
             "exported session=%s -> %s (%.1f MB)",
             session.id,
@@ -143,6 +166,21 @@ class Worker:
                 session.id,
             )
         return destination
+
+    def _mark_exported(self, session: Session, destination: Path) -> None:
+        """Write the ledger marker, treating a failure as cosmetic.
+
+        Separate from the copy's own ``try``: by the time this runs the file is
+        already in the folder, and the worst a missing marker costs is one
+        re-export after the user deletes it. That must not read as a failed
+        export, and must not stop the sweep.
+        """
+        try:
+            mixdown.mark_exported(
+                self.config.export_dir, session.id, filename=destination.name
+            )
+        except OSError as exc:  # pragma: no cover - the copy just succeeded here
+            log.warning("could not mark %s as exported: %s", session.id, exc)
 
     def claim(self, session: Session) -> None:
         """``captured`` -> ``pending``: the worker has seen it and queued it."""

@@ -157,6 +157,9 @@ glyph   = "\\U000f0ec2"
 # meeting audio in a folder staged for a third party, under its retention rather
 # than yours. Turned on, every finished recording is mixed and copied here
 # without being asked -- which is the only thing that makes the folder current.
+# Each session is exported once, ever: the folder keeps its own ledger under
+# `.exported/`, so a file deleted or moved after you upload it stays gone.
+# `munin mix <session>` puts one back.
 # `directory` is absolute or ~-relative, unlike [paths], which is under `home`.
 # The whole section goes when the local pipeline transcribes (D25).
 enabled   = false

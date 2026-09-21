@@ -38,6 +38,7 @@ from pathlib import Path
 from typing import Literal
 
 from munin import __version__
+from munin import mixdown
 from munin.config import Config
 from munin.paths import SOCKET_NAME
 
@@ -520,7 +521,23 @@ def check_export(env: DoctorEnv) -> CheckResult:
         return CheckResult("export", "fail", detail + " -- exists and is not a directory")
     if not os.access(directory, os.W_OK):
         return CheckResult("export", "fail", detail + " -- not writable")
-    return CheckResult("export", "ok", detail)
+    # Waiting vs. carried: the two numbers a person actually wants from this
+    # folder. "Waiting" is what is still to be dragged into the importer;
+    # "carried" is the ledger, and the reason the waiting list does not grow
+    # back after an upload (spec 10).
+    suffixes = {f".{fmt.extension}" for fmt in mixdown.FORMATS.values()}
+    try:
+        waiting = sum(
+            1 for path in directory.iterdir() if path.is_file() and path.suffix in suffixes
+        )
+        carried = len(mixdown.exported_ids(directory))
+    except OSError as exc:  # a check never raises
+        return CheckResult("export", "warn", f"{detail} -- cannot be listed: {exc}")
+    return CheckResult(
+        "export",
+        "ok",
+        f"{detail} -- {waiting} waiting to upload, {carried} already exported",
+    )
 
 
 def check_daemon(env: DoctorEnv) -> CheckResult:

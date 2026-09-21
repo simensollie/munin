@@ -257,7 +257,7 @@ def test_a_sweep_exports_everything_the_folder_is_missing(
 
     Worker(config).drain()
 
-    exported = sorted(path.name for path in destination.iterdir())
+    exported = sorted(path.name for path in destination.iterdir() if path.is_file())
     assert exported == sorted(f"{session.id}.opus" for session in sessions)
 
 
@@ -270,6 +270,35 @@ def test_a_sweep_still_exports_a_session_already_queued_as_pending(
     """With backend = "none" every session parks at pending with a reason, and
     the sweep skips those for transcription. The export must not be skipped with
     them, or enabling it would only ever catch a session's first sweep.
+
+    Export is turned on between the two sweeps rather than deleting the copy
+    after the first: a deleted copy is now a finished upload and stays gone.
+    """
+    destination = tmp_path / "uploads"
+    spool = Spool(_config(munin_home))
+    session = _captured_session(spool, two_track)
+
+    Worker(_config(munin_home)).drain()  # captured -> pending, export off
+
+    reloaded = Spool(_enabled(munin_home, destination)).find(session.id)
+    assert reloaded is not None and reloaded.state == "pending"
+    Worker(_enabled(munin_home, destination)).drain()
+
+    assert (destination / f"{session.id}.opus").exists()
+
+
+# -- exported once, ever ----------------------------------------------------
+
+
+def test_a_file_deleted_after_upload_is_not_put_back(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """The point of the ledger. Uploading a meeting and clearing the file is how
+    an upload ends; before this the next sweep read the absence as "never
+    exported" and refilled the folder behind the user.
     """
     destination = tmp_path / "uploads"
     config = _enabled(munin_home, destination)
@@ -277,13 +306,166 @@ def test_a_sweep_still_exports_a_session_already_queued_as_pending(
     session = _captured_session(spool, two_track)
     worker = Worker(config)
 
-    worker.drain()  # captured -> pending, with a pending_reason
+    worker.drain()
     copy = destination / f"{session.id}.opus"
-    copy.unlink()
+    assert copy.exists()
+    assert mixdown.is_exported(destination, session.id)
+
+    copy.unlink()  # uploaded, then cleared
+    worker.drain()
+    worker.drain()
+
+    assert not copy.exists()
+
+
+def test_a_file_moved_out_of_the_folder_is_not_put_back(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """Moving is the other half of the same habit -- an archive folder instead
+    of the bin -- and it has to behave the same way.
+    """
+    destination = tmp_path / "uploads"
+    archive = tmp_path / "archive"
+    archive.mkdir()
+    config = _enabled(munin_home, destination)
+    spool = Spool(config)
+    session = _captured_session(spool, two_track)
+    worker = Worker(config)
+
+    worker.drain()
+    copy = destination / f"{session.id}.opus"
+    copy.rename(archive / copy.name)
 
     worker.drain()
 
-    assert copy.exists()
+    assert not copy.exists()
+
+
+def test_a_folder_filled_before_the_ledger_existed_is_backfilled(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """Upgrade path. A file the folder is already carrying was exported, marker
+    or no marker; without this every file exported before the change would have
+    come back once more after its upload.
+    """
+    destination = tmp_path / "uploads"
+    config = _enabled(munin_home, destination)
+    spool = Spool(config)
+    session = _captured_session(spool, two_track)
+    destination.mkdir(parents=True, exist_ok=True)
+    copy = destination / f"{session.id}.opus"
+    copy.write_bytes(b"exported before the ledger existed")
+
+    Worker(config).drain()
+
+    assert mixdown.is_exported(destination, session.id)
+    assert copy.read_bytes() == b"exported before the ledger existed"
+
+    copy.unlink()
+    Worker(config).drain()
+    assert not copy.exists()
+
+
+def test_a_failed_export_leaves_no_marker(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The marker records a copy that landed. Writing it before the copy would
+    turn one transient ffmpeg failure into a meeting that never exports.
+    """
+    destination = tmp_path / "uploads"
+    config = _enabled(munin_home, destination)
+    spool = Spool(config)
+    session = _captured_session(spool, two_track)
+
+    def _boom(*args, **kwargs):
+        raise mixdown.MixdownError("ffmpeg fell over")
+
+    monkeypatch.setattr(mixdown, "mixdown", _boom)
+    assert Worker(config).export(session) is None
+    assert not mixdown.is_exported(destination, session.id)
+
+    monkeypatch.undo()
+    assert Worker(config).export(session) is not None
+    assert mixdown.is_exported(destination, session.id)
+
+
+def test_the_ledger_is_not_per_format(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """Switching [export] format is not a reason to re-export the archive. A
+    session that has had its turn in the folder has had it, whatever the
+    extension; a second format is `munin mix --force`, not a config edit.
+    """
+    destination = tmp_path / "uploads"
+    spool = Spool(_enabled(munin_home, destination))
+    session = _captured_session(spool, two_track)
+    Worker(_enabled(munin_home, destination)).drain()
+    (destination / f"{session.id}.opus").unlink()
+
+    Worker(_enabled(munin_home, destination, fmt="mp3")).drain()
+
+    assert not (destination / f"{session.id}.mp3").exists()
+
+
+def test_the_marker_says_when_and_which_file(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """A zero-byte marker answers "was it exported" and nothing else; the first
+    question after that is always "when".
+    """
+    destination = tmp_path / "uploads"
+    config = _enabled(munin_home, destination)
+    spool = Spool(config)
+    session = _captured_session(spool, two_track)
+
+    Worker(config).drain()
+
+    body = mixdown.ledger_entry(destination, session.id).read_text(encoding="utf-8")
+    stamp, _, filename = body.strip().partition("\t")
+    assert datetime.fromisoformat(stamp).tzinfo is not None
+    assert filename == f"{session.id}.opus"
+
+
+def test_the_ledger_stays_out_of_the_session_record(
+    munin_home: Path,
+    tmp_path: Path,
+    two_track: Callable[..., tuple[Path, Path]],
+    ample_disk: None,
+) -> None:
+    """Contracts 7.2: a re-encode is not a capture event. The ledger moved the
+    bookkeeping into the upload folder precisely so session.json did not have to
+    grow a field.
+    """
+    destination = tmp_path / "uploads"
+    config = _enabled(munin_home, destination)
+    spool = Spool(config)
+    session = _captured_session(spool, two_track)
+    before = json.loads((Path(session.directory) / "session.json").read_text("utf-8"))
+
+    Worker(config).drain()
+
+    after = json.loads((Path(session.directory) / "session.json").read_text("utf-8"))
+    assert set(after) == set(before)
+    assert "export" not in json.dumps(after).lower()
+    # The rows the sweep did add are ordinary state transitions, not export rows.
+    added = after["history"][len(before["history"]) :]
+    assert {row["to"] for row in added} <= {"pending", "transcribing"}
 
 
 # -- the worker's own log ---------------------------------------------------

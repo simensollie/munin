@@ -50,8 +50,11 @@ timestamp in a Munin one.
 
 The mix is not part of the session record: no ``session.json`` field, no state
 transition, no history entry. It is a re-encode of audio that already exists,
-and the audit trail is about what was captured (contracts section 3). Its
-presence on disk is the whole of its bookkeeping.
+and the audit trail is about what was captured (contracts section 3). What
+little bookkeeping it has stays on the filesystem: the file in the session
+directory, and -- for the upload folder only -- a marker under
+``<upload folder>/.exported/`` saying the folder has already carried this
+session, so a file deleted after it was uploaded is not silently put back.
 
 Owner: worker workstream. Spec 10; not part of the frozen PoC contract surface.
 """
@@ -63,6 +66,7 @@ import os
 import shutil
 import subprocess
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Sequence
 
@@ -82,6 +86,13 @@ __all__ = [
     "mix_argv",
     "mixdown",
     "export_filename",
+    "LEDGER_DIRNAME",
+    "ledger_dir",
+    "ledger_entry",
+    "is_exported",
+    "mark_exported",
+    "forget_export",
+    "exported_ids",
 ]
 
 log = logging.getLogger("munin.mixdown")
@@ -140,6 +151,10 @@ LIMIT = 0.95
 #: Plaud's per-file ceiling (spec 10). Munin warns; it does not split the file,
 #: because where to cut a five-hour meeting is the user's call, not a default.
 PLAUD_MAX_SECONDS = 5 * 3600
+
+#: The upload folder's own bookkeeping: one marker per session it has already
+#: carried, so deleting an uploaded file does not summon it back.
+LEDGER_DIRNAME = ".exported"
 
 #: States where the audio files are still being written to.
 BUSY_STATES = frozenset({"recording", "ending"})
@@ -205,6 +220,84 @@ def export_filename(session_id: str, fmt: str | MixFormat = DEFAULT_FORMAT) -> s
     """
     resolved = fmt if isinstance(fmt, MixFormat) else mix_format(fmt)
     return f"{session_id}.{resolved.extension}"
+
+
+# --------------------------------------------------------------------------
+# The ledger: what the upload folder has already carried
+# --------------------------------------------------------------------------
+#
+# Until this existed, a destination file's presence was the whole of the
+# bookkeeping, which made "exported" and "still here" the same fact. They are
+# not: uploading a file to Plaud and then deleting or moving it is the normal
+# end of its life, and the next sweep read the absence as "never exported" and
+# put it back. The folder refilled itself behind the user.
+#
+# The fix keeps the bookkeeping in the folder rather than moving it onto the
+# session record. Spec 10 sketched the other option -- `munin mark-uploaded`
+# and upload state in session metadata -- and the 2026-09-18 amendment ruled it
+# out: a `session.json` field makes a re-encode look like a capture event
+# (contracts 7.2) and puts new schema on a surface D25 deletes. A marker beside
+# the files it describes costs neither, goes when the folder goes, and is
+# readable with `ls`.
+#
+# The marker is written *after* a successful copy, so a failed export still
+# retries on the next sweep, and it is named for the session alone, not the
+# format: a session exported as Opus and later configured for MP3 has still had
+# its turn in the folder, and re-exporting it in a second format is a decision
+# for `munin mix --force`, not a side effect of editing config.toml.
+
+
+def ledger_dir(export_dir: Path) -> Path:
+    """The marker directory inside the upload folder.
+
+    Dotted, so the folder a human scans for "what still needs uploading" holds
+    only the files they are there to upload.
+    """
+    return Path(export_dir) / LEDGER_DIRNAME
+
+
+def ledger_entry(export_dir: Path, session_id: str) -> Path:
+    """The marker path for one session. The session id is already a safe name."""
+    return ledger_dir(export_dir) / session_id
+
+
+def is_exported(export_dir: Path, session_id: str) -> bool:
+    """Has this session already had its turn in the upload folder?"""
+    return ledger_entry(export_dir, session_id).exists()
+
+
+def mark_exported(export_dir: Path, session_id: str, *, filename: str | None = None) -> Path:
+    """Record that the folder carried this session, and return the marker.
+
+    The marker holds one line -- when it was written, and the filename it was
+    written for -- because a zero-byte file answers "was it exported" and
+    nothing else, and the first question after that is always "when".
+    Rewriting an existing marker is allowed: a deliberate re-export through
+    ``munin mix`` is a new turn in the folder, and its date is the useful one.
+    """
+    entry = ledger_entry(export_dir, session_id)
+    entry.parent.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now().astimezone().isoformat(timespec="seconds")
+    entry.write_text(f"{stamp}\t{filename or ''}\n", encoding="utf-8")
+    return entry
+
+
+def forget_export(export_dir: Path, session_id: str) -> bool:
+    """Drop the marker so the session exports again. True if one was there."""
+    entry = ledger_entry(export_dir, session_id)
+    if not entry.exists():
+        return False
+    entry.unlink()
+    return True
+
+
+def exported_ids(export_dir: Path) -> list[str]:
+    """Every session the folder has carried, sorted -- which is chronological,
+    since a session id starts with its own date and time."""
+    directory = ledger_dir(export_dir)
+    if not directory.is_dir():
+        return []
+    return sorted(entry.name for entry in directory.iterdir() if entry.is_file())
 
 
 def track_pairs(session) -> list[tuple[Path, Path]]:
