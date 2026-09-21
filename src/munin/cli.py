@@ -337,11 +337,9 @@ def _cmd_mix(args: argparse.Namespace) -> int:
         sessions = [
             session
             for session in spool.iter_sessions()
-            if session.state not in mixdown_module.BUSY_STATES
-            # A split parent holds both meetings; its halves hold one each, and
-            # they are what a manual upload wants (D26). Mixing all three would
-            # put the merged recording in the upload folder beside them.
-            and session.state != "split"
+            # Busy, or a split parent whose halves are the meetings (D26) --
+            # the same set the worker's sweep uses, so the two cannot drift.
+            if session.state not in mixdown_module.SKIP_STATES
         ]
         if not sessions:
             print("no sessions to mix")

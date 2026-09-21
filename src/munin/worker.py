@@ -117,6 +117,10 @@ class Worker:
         7.2). The ledger lives in the upload folder instead, and goes when the
         folder goes (D25).
 
+        A split parent is skipped with the still-being-written states
+        (``mixdown.SKIP_STATES``): it holds both meetings, its halves hold one
+        each, and the halves are what an upload wants (D26).
+
         What is given up is self-healing: a file deleted by accident no longer
         comes back on the next sweep. ``munin mix <session> --force`` puts it
         back deliberately, which is the right way round -- a folder that
@@ -129,7 +133,7 @@ class Worker:
         """
         if not self.config.export.enabled:
             return None
-        if session.state in mixdown.BUSY_STATES:
+        if session.state in mixdown.SKIP_STATES:
             return None
         fmt = self.config.export.format
         export_dir = self.config.export_dir

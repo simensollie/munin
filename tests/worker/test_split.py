@@ -675,6 +675,73 @@ def test_mix_all_leaves_a_split_parent_alone(
     assert not (session.directory / "mixed.opus").exists()
 
 
+@pytest.mark.skipif(FFMPEG is None, reason="the cut and the mix need ffmpeg")
+def test_the_worker_leaves_a_split_parent_alone(
+    munin_home: Path,
+    tmp_path: Path,
+    spool: Spool,
+    two_track: Callable[..., tuple[Path, Path]],
+) -> None:
+    """The same rule as `munin mix --all`, and the one the sweep was missing:
+    the parent holds both meetings, so exporting it puts the merged recording in
+    the upload folder beside the two it was cut into (D26).
+    """
+    from munin.worker import Worker
+
+    session = _captured_session(spool, two_track, seconds=4.0)
+    first, second = split(session, spool=spool, at_seconds=2.0)
+    destination = tmp_path / "uploads"
+    (munin_home / "config.toml").write_text(
+        f'[export]\nenabled = true\ndirectory = "{destination}"\n', encoding="utf-8"
+    )
+    config = config_module.load()
+
+    Worker(config).drain()
+
+    exported = sorted(path.stem for path in destination.glob("*.opus"))
+    assert exported == sorted([first.id, second.id])
+    assert not (destination / f"{session.id}.opus").exists()
+    assert not (session.directory / "mixed.opus").exists()
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="the cut needs ffmpeg")
+def test_a_full_disk_on_the_second_half_leaves_no_orphan(
+    spool: Spool,
+    two_track: Callable[..., tuple[Path, Path]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The disk guard lives in `derive`, and `NoSpaceError` is a `StateError`,
+    not an `OSError`. Part 1's audio is on disk by the time part 2 asks for
+    room, and a directory with no session.json is invisible to the spool and
+    never retried -- so the rollback has to cover this path too.
+    """
+    from munin.spool import NoSpaceError
+
+    session = _captured_session(spool, two_track, seconds=4.0)
+    before = {path.name for path in spool.recordings.rglob("*") if path.is_dir()}
+    real_derive = Spool.derive
+    calls = {"n": 0}
+
+    def _second_one_has_no_room(self, **kwargs):
+        calls["n"] += 1
+        if calls["n"] == 2:
+            raise NoSpaceError("400 MB free below the minimum, refusing to write")
+        return real_derive(self, **kwargs)
+
+    monkeypatch.setattr(Spool, "derive", _second_one_has_no_room)
+
+    with pytest.raises(NoSpaceError):
+        split(session, spool=spool, at_seconds=2.0)
+
+    after = {path.name for path in spool.recordings.rglob("*") if path.is_dir()}
+    assert after == before, "part 1's directory was left behind"
+    parent = read_session(session.directory)
+    assert parent.state == "captured"
+    assert parent.split_into is None
+    assert spool.inbox_ids() == [session.id]
+    assert [s.id for s in spool.iter_sessions()] == [session.id]
+
+
 def test_a_missing_ffmpeg_is_a_run_failure_not_a_precondition(
     spool: Spool, two_track: Callable[..., tuple[Path, Path]]
 ) -> None:
