@@ -28,6 +28,9 @@ INSTALL_SH = REPO_ROOT / "install.sh"
 MARK_BEGIN = "-- >>> munin (managed by munin install.sh) >>>"
 MARK_END = "-- <<< munin (managed by munin install.sh) <<<"
 KEYBIND_LINE = 'o.bind("SUPER + SHIFT + R", "Record meeting", "munin toggle")'
+SPLIT_KEYBIND_LINE = (
+    'o.bind("SUPER + CTRL + SHIFT + R", "Split meeting here", "munin split --now")'
+)
 
 
 def _keybind_backups(machine: FakeMachine) -> list[Path]:
@@ -163,6 +166,91 @@ def test_unbind_is_emitted_when_omarchy_owns_the_key(machine: FakeMachine, tmp_p
     text = machine.bindings_target.read_text(encoding="utf-8")
     assert 'hl.unbind("SUPER + SHIFT + R")' in text
     assert text.index('hl.unbind("SUPER + SHIFT + R")') < text.index(KEYBIND_LINE)
+
+
+def test_both_keybindings_are_written(machine: FakeMachine) -> None:
+    """Record and split are the same gesture at the same moment (D26)."""
+    machine.run()
+
+    text = machine.bindings_target.read_text(encoding="utf-8")
+    assert KEYBIND_LINE in text
+    assert SPLIT_KEYBIND_LINE in text
+    assert text.count(MARK_BEGIN) == 1
+
+
+def test_a_block_from_before_the_split_binding_is_rewritten(machine: FakeMachine) -> None:
+    """The upgrade path. An existing install has a munin block with one binding
+    in it; appending a second block would bind the record key twice, so the
+    block is rewritten in place -- through the symlink, into the dotfiles repo.
+    """
+    machine.bindings_target.write_text(
+        machine.bindings_target.read_text(encoding="utf-8")
+        + f"\n{MARK_BEGIN}\n{KEYBIND_LINE}\n{MARK_END}\n",
+        encoding="utf-8",
+    )
+    before = len(_keybind_backups(machine))
+
+    proc = machine.run()
+
+    text = machine.bindings_target.read_text(encoding="utf-8")
+    assert text.count(MARK_BEGIN) == 1
+    assert text.count(MARK_END) == 1
+    assert text.count(KEYBIND_LINE) == 1
+    assert SPLIT_KEYBIND_LINE in text
+    assert "predates" in proc.stdout
+    # Rewriting somebody else's tracked file takes its own backup.
+    assert len(_keybind_backups(machine)) == before + 1
+    # Still a symlink: the dotfiles repo sees the edit, and does not get replaced
+    # by a regular file.
+    assert machine.bindings_link.is_symlink()
+
+
+def test_a_rewrite_keeps_everything_around_the_block(machine: FakeMachine) -> None:
+    """The block is swapped; the file it lives in is not."""
+    original = machine.bindings_target.read_text(encoding="utf-8")
+    machine.bindings_target.write_text(
+        original + f"\n{MARK_BEGIN}\n{KEYBIND_LINE}\n{MARK_END}\n"
+        'o.bind("SUPER + K", "Something of mine", "true")\n',
+        encoding="utf-8",
+    )
+
+    machine.run()
+
+    text = machine.bindings_target.read_text(encoding="utf-8")
+    assert original.strip() in text
+    assert 'o.bind("SUPER + K", "Something of mine", "true")' in text
+
+
+def test_the_split_key_bound_by_omarchy_is_unbound_first(
+    machine: FakeMachine, tmp_path: Path
+) -> None:
+    defaults = tmp_path / "omarchy-defaults"
+    defaults.mkdir()
+    (defaults / "applications.lua").write_text(
+        'o.bind("SUPER + CTRL + SHIFT + R", "Something else", "other")\n', encoding="utf-8"
+    )
+    machine.env["OMARCHY_DEFAULT_BINDINGS"] = str(defaults)
+
+    machine.run()
+
+    text = machine.bindings_target.read_text(encoding="utf-8")
+    assert 'hl.unbind("SUPER + CTRL + SHIFT + R")' in text
+    assert text.index('hl.unbind("SUPER + CTRL + SHIFT + R")') < text.index(SPLIT_KEYBIND_LINE)
+    # The record key is not Omarchy's here, so it gets no unbind.
+    assert 'hl.unbind("SUPER + SHIFT + R")' not in text
+
+
+def test_a_foreign_split_binding_is_left_alone(machine: FakeMachine) -> None:
+    """Somebody else's binding on either key stops the install touching the file."""
+    machine.bindings_target.write_text(
+        'o.bind("SUPER + CTRL + SHIFT + R", "Theirs", "something-else")\n', encoding="utf-8"
+    )
+
+    proc = machine.run()
+
+    text = machine.bindings_target.read_text(encoding="utf-8")
+    assert MARK_BEGIN not in text
+    assert "already bound" in proc.stderr
 
 
 def test_a_bar_without_the_anchor_still_gets_the_widget(machine: FakeMachine) -> None:

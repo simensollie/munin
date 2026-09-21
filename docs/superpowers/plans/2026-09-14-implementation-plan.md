@@ -75,8 +75,8 @@ munin/
 | # | Milestone | Delivers | Blocked by | Exit criterion |
 |---|---|---|---|---|
 | M1 | Linux two-track capture | `capture/base.py` and `detect/base.py` first, then the Linux implementations; `munin-rec` captures on command and writes a session | — | A real Teams call yields `mic.opus` + `app.opus` with correct separation, and nothing above the boundary names a platform |
-| M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard | M1 | Ad-hoc path works with no calendar and no detection |
-| M3 | Shell plugin | Detection, three notifications, bar states, dropdown panel | M0, M2 | Joining a Teams call prompts; the bar shows state throughout |
+| M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard; `munin split` and the `split` state (D26, added 2026-09-21) | M1 | Ad-hoc path works with no calendar and no detection; a two-meeting recording cuts into two sessions and the parent keeps its audio |
+| M3 | Shell plugin | Detection, three notifications, bar states, dropdown panel; the split prompt and its panel button (D26, added 2026-09-21) | M0, M2 | Joining a Teams call prompts; the bar shows state throughout; a second call going live mid-recording offers a split |
 | M4 | Pipeline on `local` | Language routing, ASR, diarization, attribution tiers 1/3/4, output format | M1 | A captured meeting yields a conformant transcript |
 | M4a | GPU courtesy | `keep_warm = false` path, `defer_when_busy` VRAM check before claiming a session, CUDA OOM treated as an unreachable sink (D22, spec §8.2) | M4 | A session defers while the GPU is committed elsewhere and drains when it frees |
 | M5 | `munin doctor` and `install.sh` | One-command install, wizard, check | M3, M4 | A clean machine reaches a working recording without reading the spec |
@@ -129,7 +129,13 @@ Written alongside each milestone, not after.
   duplicate-event handling, disk-full refusal.
 - **M3**: detection matrix — native app, PWA and browser tab each trigger; a
   browser with audio and no microphone does not; a Teams tab with no call does
-  not.
+  not; a second call going live mid-recording offers a split once per distinct
+  call, never once per poll.
+- **M2 (split, D26)**: the halves' audio sums to the parent's and each tone
+  survives its own track; the parent keeps its checksums and leaves the queue;
+  a cut that fails part-way leaves the parent queued and no directory behind.
+  What stays untested until real hardware is a live split during an actual
+  call, and how often an application renames its own window mid-call (OQ13).
 - **M4**: output conformance — monotonic timestamps, `HH:MM:SS`, filename
   convention; self-attribution exact on two-track fixtures.
 - **M8**: voice matching — precision and recall against hand-labelled
@@ -200,6 +206,22 @@ Numbers refer to the spec's §14.
    writes Opus at 24 kbps (3.0 MB for that meeting) instead of the MP3 at
    64 kbps (8.2 MB) the first draft of §10 chose — smaller and better, with no
    risk to a master copy.
+
+7. **The split's three open questions (OQ13, OQ14, OQ15), added 2026-09-21.**
+   None blocks the split shipping; each blocks calling it finished.
+   - **OQ13 — how often does a meeting application rename its own window
+     mid-call?** The prompt reads `(pid, window_title)` as a call's identity, so
+     a rename is a false prompt. `munin-rec` now logs the rename-shaped case
+     ("renamed or next meeting" in `~/munin/munin.log`), so this is answered by
+     using the thing for a week, not by reasoning about it.
+   - **OQ14 — what does a split mean once `calendar_event_id` is populated?**
+     Both halves inherit the parent's event id, which §11's duplicate-capture
+     rule reads as one meeting captured twice. Needs a `split_from` carve-out
+     **before M9 lands**, not after.
+   - **OQ15 — is a split one record or three for retention?** The parent holds a
+     full copy of audio that now also exists in the halves, and a half can be
+     split again, so it is not even bounded at three. Part of the retention
+     decision (item 2), not a separate one.
 
 ## 8. What to do first
 

@@ -675,6 +675,41 @@ def test_mix_all_leaves_a_split_parent_alone(
     assert not (session.directory / "mixed.opus").exists()
 
 
+@pytest.mark.skipif(FFMPEG is None, reason="the cut needs ffmpeg")
+def test_a_half_can_be_split_again(
+    spool: Spool, two_track: Callable[..., tuple[Path, Path]]
+) -> None:
+    """Three meetings in one recording: cut twice. A half is born `captured`,
+    which is splittable, and the provenance becomes a chain -- the grandchild
+    points at the half, and the half at the original capture.
+    """
+    session = _captured_session(spool, two_track, seconds=6.0)
+    first, second = split(session, spool=spool, at_seconds=2.0)
+
+    inner_first, inner_second = split(second, spool=spool, at_seconds=2.0)
+
+    half = read_session(second.directory)
+    assert half.state == "split"
+    assert half.split_into == [inner_first.id, inner_second.id]
+    # Two hops back to the capture, not one.
+    assert half.split_from["session"] == session.id
+    assert inner_first.split_from["session"] == second.id
+    assert read_session(session.directory).state == "split"
+    # The three meetings that are left are the ones a transcript should be made
+    # of: part 1 of the first cut, and both parts of the second.
+    queued = sorted(spool.inbox_ids())
+    assert queued == sorted([first.id, inner_first.id, inner_second.id])
+    # Audio still adds up: 2 s + 2 s + 2 s.
+    for piece, expected in (
+        (first, 2.0),
+        (inner_first, 2.0),
+        (inner_second, 2.0),
+    ):
+        assert _duration(piece.directory / "mic.opus") == pytest.approx(
+            expected, abs=PACKET_SLACK
+        )
+
+
 @pytest.mark.skipif(FFMPEG is None, reason="the cut and the mix need ffmpeg")
 def test_the_worker_leaves_a_split_parent_alone(
     munin_home: Path,

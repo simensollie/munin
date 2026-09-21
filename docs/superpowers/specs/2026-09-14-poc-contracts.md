@@ -696,7 +696,7 @@ which is what "offered alongside rather than instead" already promised.
 
 | When | Urgency | Title / body | Primary action (`--exec`) | Secondaries live in |
 |---|---|---|---|---|
-| Call detected | `normal`, `-t 30000` | "Meeting detected" / "<app> call, <time>. Click to record." | `munin start --from-detection` | Panel: *Not this one* (dismiss). *Never for this meeting* is deferred — it needs the calendar series id (M9). |
+| Call detected | `normal`, `-t 30000` | "Meeting detected" / "<app> call, <time>. Click to record." | `munin start --from-detection` | — (declining is dismissing the notification; *Never for this meeting* is deferred, it needs the calendar series id at M9). |
 | Streams gone 1 min (`warn_seconds`) | `normal`, `-t 60000` | "Meeting seems over" / "Recording stops in 1:00. Click to stop now." | `munin stop` | Panel and keybind: *Keep recording* (`munin start --resume` is not it — the session is still recording; the panel calls `munin event call-started` to cancel the grace period). |
 | Auto-stopped | `critical` on failure, else `normal` | "Recording stopped" / "*n* min saved. Click to resume." | `munin start --resume` | Panel: *Open session*. |
 | A capture track died mid-meeting | `critical` | "Recording problem" / "Your microphone (or The meeting audio) stopped recording. The rest continues. Click to stop." | `munin stop` | — (once per track per session; a dead microphone ends the session instead and notifies as *Auto-stopped*). |
@@ -1343,7 +1343,7 @@ queued exactly as `stop` would have left it.
 
 | When | Urgency | Title / body | Primary action (`--exec`) | Secondaries live in |
 |---|---|---|---|---|
-| A different call goes live while recording | `normal`, `-t 60000` | "New meeting detected" / "&lt;app&gt; call, &lt;time&gt;, while recording. Click to split here." | `munin split --now` | Panel: *Split here* while `recording`; *Same meeting* is the dismiss, because a split is start-shaped and doing nothing has to mean "no" (spec §6.3). |
+| A different call goes live while recording | `normal`, `-t 60000` | "New meeting detected" / "&lt;app&gt; call, &lt;time&gt;, while recording. Click to split here." | `munin split --now` | Panel: *Split here* while `recording`, and the `SUPER + CTRL + SHIFT + R` keybind. There is no *Same meeting* button: a split is start-shaped, so doing nothing already means "no" (spec §6.3), and a button that does what ignoring the prompt does is one more thing to explain. |
 
 Sent once per distinct call per session, not once per detection poll. A call is
 distinct when `(pid, window_title)` differs from the recording session's; a
@@ -1413,6 +1413,17 @@ title. Part 1 keeps the parent's title and starts in the parent's minute, so the
 id it wants is the one the parent holds and it takes the `-2` collision suffix —
 an id artefact, not a part number, which is why `munin split` prints `part 1` and
 `part 2` in front of the ids it made.
+
+**A half can be split again.** A half is born `captured`, which is a splittable
+state, so a recording that turned out to hold three meetings is cut twice. The
+second cut treats the half as any other parent: the half moves to `split`, two
+new sessions are derived from it, and `split_from` points at the half, not at
+the original — the provenance is a chain, and following it back to the capture
+is two hops instead of one. Nothing special is done to support this and nothing
+prevents it; it falls out of halves being ordinary sessions, which is the point
+of deriving them rather than rewriting the parent. The cost is the audio: three
+meetings cut twice leave the original, the first cut's two halves and the second
+cut's two, and the retention question (§15.5) gets correspondingly larger.
 
 **Ordering, so an interrupted split cannot lose a meeting.** Each half's
 *directory* is filled and checksummed first; then the parent is moved to
