@@ -89,6 +89,7 @@ second customer name appears zero times in 756,000 words.
 | D22 | Models are not kept warm by default, and the worker defers to a busy GPU | The reference desktop's 3070 is a shared resource, and the pipeline is asynchronous. ~6 GB of permanently held VRAM buys about a minute per job that nobody is waiting for (§7.2, §8) |
 | D23 | The `local` backend never imports the model stack; it runs it in a separate interpreter as a subprocess | Munin is stdlib-only and installs against the system Python, which on the reference desktop is 3.14; the pinned pyannote/faster-whisper/torch set needs 3.12. A process boundary keeps the two lifecycles independent, matches how every other external tool is invoked, and costs only interpreter startup, since D22 already reloads the model per job (§8.1) |
 | D24 | The session directory is the only place a transcript is written; no copy goes to the second brain | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
+| D26 | One recording that holds two meetings is split into two sessions, never left as one and never cut in place | Walking from one meeting into the next without stopping the recording is the failure this tool was built around a user having. The record is what is wrong, not the audio: one file means diarization clusters speakers across both meetings, two sets of participants share one transcript, one retention clock and one access boundary (§12), and the second meeting carries the first one's title. A split is offered live at the boundary (§6.4) and can be made afterwards (`munin split`); the parent keeps its audio and its checksums either way, because a store that rewrites what it captured has no integrity left to show an auditor |
 | D25 | The Plaud export is a stopgap, removed once the local pipeline transcribes | §10 exists because `backend = "none"` leaves no other route from a recording to text. When M4 produces transcripts on this machine, the mix, `munin mix` and the upload folder are deleted rather than maintained, and D11's retention of mixed audio ends with them. What removal costs is the summary (§10) |
 
 ## 5. Architecture
@@ -191,20 +192,23 @@ nothing, then fall back to the Hyprland window owning that stream's PID and test
 class, then title. Adding Zoom, Meet or Slack later is a row in that table;
 condition 1 is already true for all of them.
 
-**Three notifications, no more.** The Omarchy 4 notification daemon sets
-`actionsSupported: true` (Appendix D), so each carries real buttons. The keybind
-and the bar module work regardless, and are offered alongside rather than
-instead — a notification can be missed, a keybind cannot.
+**One notification per decision the user has to make.** The Omarchy 4
+notification daemon sets `actionsSupported: true` (Appendix D), so each carries
+real buttons. The keybind and the bar module work regardless, and are offered
+alongside rather than instead — a notification can be missed, a keybind cannot.
 
 | When | Says | Actions |
 |---|---|---|
 | Call detected | Meeting detected, with title and attendee count from the calendar | Record · Not this one · Never for this meeting |
+| A different call goes live while recording (§6.4) | New meeting detected, while recording | Split here · Same meeting |
 | Streams gone 1 min | Meeting looks finished, stops by itself at 2:00 | Stop and transcribe · Keep recording |
 | Auto-stopped | Recording stopped, *n* min captured, transcribing now | Resume · Open session |
 
 The asymmetry is deliberate. Starting requires an explicit yes; stopping happens
 on a timer if nothing is said. A missed start prompt costs one recording; a
-missed stop prompt would record the rest of the afternoon.
+missed stop prompt would record the rest of the afternoon. A split is
+start-shaped, so it follows the same rule: doing nothing means *same meeting*,
+and the recording continues either way.
 
 **Resume continues, it does not restart** (D15). Resuming within 10 minutes
 reopens the same session directory and writes `mic.002.opus` alongside the first
@@ -226,6 +230,54 @@ anything.
 
 Recording inhibits idle/lock for its duration (`shell.json` sets screensaver at
 150 s and lock at 300 s, which would otherwise fire mid-meeting).
+### 6.4 Two meetings in one recording (D26)
+
+The commonest way a session ends up wrong is not a failure of capture at all:
+the user leaves one meeting, joins the next, and never stops the recording. The
+audio is complete and correct; the *record* holds two meetings under one title.
+That is expensive downstream and quietly so — diarization builds its speaker
+clusters over whatever it is given, so two sets of participants merge into one
+register of voices, and one transcript then holds two customers' talk under a
+single retention clock and a single access boundary (§12).
+
+Munin handles it in two places, and the cheap one is the one that should
+normally fire.
+
+**At the boundary, live.** The daemon already sees the evidence: a call going
+live while it is recording another one. Where it used to ignore that — and
+inside the grace period actively mistake it for the first meeting's stream
+coming back, which is how the two get glued together — it now asks. One
+notification, *Split here*, and the panel carries the same action for the case
+where nobody was watching the screen. D4 holds: the daemon keeps recording and
+never splits by itself, because a split nobody asked for costs two records to
+merge by hand. Confirming closes the running session exactly as *Stop* would and
+opens the next one against the call that prompted the question, so there is no
+audio to cut and nothing to get wrong; the gap between the two is well under a
+second.
+
+A call is "different" when its process and window title differ from the ones the
+session was started against. Neither alone is enough: two consecutive meetings
+in one Teams window share a process and differ only in the title, while two tabs
+differ in process and may share a generic title. The known false positive is an
+application that renames its own window mid-call, which costs one dismissed
+prompt — the error worth having in this direction.
+
+**Afterwards, in the file.** `munin split <session> <HH:MM:SS>` (or `--clock
+14:02`, read against the wall clock the meeting actually ran on) cuts a captured
+session in two. The cut point counts *captured audio*, the same axis the
+transcript and the mix use, so a resumed session's gap takes no time. The audio
+is cut with a stream copy rather than re-encoded, which costs a 20 ms packet
+boundary and nothing else.
+
+**The parent is never rewritten.** Its audio and its `checksums` are the record
+of what the machine captured, so the two halves are new sessions derived from it
+and the parent moves to a terminal `split` state: every byte it had, and no
+longer anything the worker will transcribe. `split_into` on the parent and
+`split_from` on each half are the provenance chain, and all three carry a
+`history[]` row for the cut. The cost is one duplicated copy of the audio — at
+24 kbps, a two-hour meeting is about 43 MB — which is the price of not making
+the session store the kind of thing that edits its own evidence.
+
 ## 7. Pipeline
 
 ### 7.1 Language routing
@@ -701,6 +753,9 @@ munin voice disable ola
 munin voice delete ola
 munin voice reembed --all
 munin review
+munin split --now                       # the running recording, at this moment
+munin split <session> 27:32             # a captured one, at an offset
+munin split <session> --clock 14:02     # or at a time of day
 munin glossary suggest | lint | test <session>
 ```
 
@@ -785,6 +840,7 @@ The design principle is that transcripts arrive late, never missing.
 | Calendar unreachable | Ad-hoc mode: capture still triggers on application audio, title falls back to timestamp. |
 | Disk fills | Refuse to start a new capture below a configured threshold and alert, rather than truncating. |
 | Duplicate capture (two machines in the same meeting) | Sessions carry the calendar event ID; the worker keeps the longest and discards the rest. |
+| Two meetings in one recording (nobody stopped between them) | The daemon offers a split when a different call goes live mid-recording; afterwards, `munin split` cuts the session in two. The parent keeps its audio and leaves the queue (D26, §6.4). |
 
 Spool sessions are never deleted by the worker, only marked `done`. A separate
 retention pass handles cleanup (§10).
@@ -820,6 +876,16 @@ Flagging explicitly rather than burying it:
   the M365 directory into a local file, as a side effect of a convenience
   feature. A user-written glossary holds only the terms the user chose to put
   there, which is the smaller and more defensible set.
+- **A split is a record event, not an edit** (D26, §6.4). Two meetings in one
+  recording is a compliance problem before it is an inconvenience: one
+  transcript then covers two sets of participants under one retention clock and
+  one access boundary. Cutting it is therefore done additively — the parent
+  keeps its audio and its checksums and moves to a terminal `split` state, the
+  two halves are new sessions, and all three records carry the cut in
+  `history[]` with `split_from`/`split_into` linking them. A reviewer can still
+  see what was captured and what was derived from it. The cost is that a split
+  leaves two copies of the same audio until retention removes one, which is the
+  same open decision as everything else here.
 - **Personal vault, work content.** Settled by D24. The second brain is personal
   and transcripts of customer meetings are company records, so Munin no longer
   writes into it. The authoritative copy is the session directory under
@@ -901,6 +967,23 @@ Still open:
     written? Defensible either way; decide once and write it down.
 12. Spool transport for the `ssh` backend — rsync over ssh is assumed, but NFS
     and a pull model have different failure modes under §11.
+13. **How often does a real meeting application rename its own window
+    mid-call?** The split prompt (§6.4) reads process plus window title as a
+    call's identity, so a renamed window is a false positive. Verified only
+    against synthetic evidence; a live Teams call that starts screen sharing,
+    admits someone from the lobby or is renamed by its organiser has not been
+    watched. If it turns out to be common, the fix is to require the process to
+    differ as well, at the cost of missing back-to-back meetings in one window.
+14. **What does a split mean once `calendar_event_id` is populated (M9)?** Both
+    halves would inherit the parent's event id, which §11's duplicate-capture
+    rule reads as two captures of one meeting and resolves by keeping the
+    longest. The halves are not duplicates, so that rule needs a carve-out for
+    `split_from` before M9 lands.
+15. **Does a split of a session belong in the retention pass as one record or
+    three?** The parent holds a full copy of audio that now also exists in the
+    halves. Deleting the parent early is the obvious saving and the obvious loss
+    of the original capture; this is part of the retention decision (§10), not a
+    separate one.
 
 ## 15. Install and setup
 

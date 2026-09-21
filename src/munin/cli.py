@@ -52,6 +52,7 @@ EXIT_CHECK_FAILED = 5
 _EXIT_FOR_CODE: dict[str, int] = {
     "already_recording": EXIT_PRECONDITION,
     "not_recording": EXIT_PRECONDITION,
+    "too_soon": EXIT_PRECONDITION,
     "no_space": EXIT_PRECONDITION,
     "capture_failed": EXIT_ERROR,
     "bad_request": EXIT_USAGE,
@@ -117,6 +118,45 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         metavar="DIR",
         help="also copy the mix there, named after the session title",
+    )
+
+    split_cmd = sub.add_parser(
+        "split", help="cut a recording that holds two meetings into two sessions"
+    )
+    split_cmd.add_argument(
+        "session",
+        nargs="?",
+        default=None,
+        help="session id; default is the most recent. A time here means the cut point",
+    )
+    split_cmd.add_argument(
+        "at",
+        nargs="?",
+        default=None,
+        help="cut point on the audio timeline: HH:MM:SS, MM:SS or seconds",
+    )
+    split_cmd.add_argument(
+        "--now",
+        action="store_true",
+        help="split the running recording here: finish it and start the next one",
+    )
+    split_cmd.add_argument(
+        "--clock",
+        default=None,
+        metavar="HH:MM",
+        help="cut at this time of day instead of an offset into the audio",
+    )
+    split_cmd.add_argument(
+        "--title",
+        default=None,
+        help="title for the second meeting (the new recording, with --now)",
+    )
+    split_cmd.add_argument(
+        "--title-first",
+        dest="title_first",
+        default=None,
+        metavar="TEXT",
+        help="rename the first half; it keeps the original title otherwise",
     )
 
     event = sub.add_parser("event", help="feed detection evidence from the plugin")
@@ -281,6 +321,10 @@ def _cmd_mix(args: argparse.Namespace) -> int:
             session
             for session in spool.iter_sessions()
             if session.state not in mixdown_module.BUSY_STATES
+            # A split parent holds both meetings; its halves hold one each, and
+            # they are what a manual upload wants (D26). Mixing all three would
+            # put the merged recording in the upload folder beside them.
+            and session.state != "split"
         ]
         if not sessions:
             print("no sessions to mix")
@@ -331,6 +375,111 @@ def _cmd_mix(args: argparse.Namespace) -> int:
                 file=sys.stderr,
             )
     return EXIT_ERROR if failed else EXIT_OK
+
+
+def _cmd_split(args: argparse.Namespace) -> int:
+    """Cut a session in two (D26), live or after the fact.
+
+    ``--now`` is the daemon's job and goes through the socket; a cut of a
+    captured session is a file operation and reads the spool directly, like
+    ``mix`` -- so it works with ``munin-rec`` down, and a two-hour session does
+    not hold the daemon's event loop while ffmpeg runs.
+    """
+    from munin import ipc
+    from munin import split as split_module
+    from munin.spool import NoSpaceError, Spool
+
+    if args.now:
+        for flag, name in (
+            (args.session, "a session id"),
+            (args.at, "a cut point"),
+            (args.clock, "--clock"),
+            (args.title_first, "--title-first"),
+        ):
+            if flag:
+                print(f"--now splits the running recording; drop {name}", file=sys.stderr)
+                return EXIT_USAGE
+        data = ipc.call("split", title=args.title)
+        print(
+            f"captured: {data.get('closed_id')} "
+            f"{_clock(data.get('closed_duration_seconds'))}"
+        )
+        print(f"recording: {data.get('session_id')} segment {data.get('segment')}")
+        return EXIT_OK
+
+    session_id, at = args.session, args.at
+    if at is None and session_id is not None and args.clock is None:
+        # One positional and no --clock: "munin split 27:32" is the common case,
+        # and it means the most recent session, the way "munin mix" does.
+        try:
+            split_module.parse_offset(session_id)
+        except split_module.SplitError:
+            pass
+        else:
+            session_id, at = None, session_id
+    if at is not None and args.clock is not None:
+        print("give a cut point or --clock, not both", file=sys.stderr)
+        return EXIT_USAGE
+    if at is None and args.clock is None:
+        print(
+            "give a cut point: munin split [session] HH:MM:SS, or --clock HH:MM",
+            file=sys.stderr,
+        )
+        return EXIT_USAGE
+
+    spool = Spool(_config())
+    if session_id:
+        session = spool.find(session_id)
+        if session is None:
+            print(f"no session {session_id}", file=sys.stderr)
+            return EXIT_USAGE
+    else:
+        session = spool.latest()
+        if session is None:
+            print("no sessions yet", file=sys.stderr)
+            return EXIT_PRECONDITION
+
+    try:
+        if args.clock is not None:
+            at_seconds = split_module.clock_to_offset(session, args.clock)
+        else:
+            at_seconds = split_module.parse_offset(at)
+        first, second = split_module.split(
+            session,
+            spool=spool,
+            at_seconds=at_seconds,
+            titles=(args.title_first, args.title),
+        )
+    except split_module.SplitUsage as exc:
+        # What was typed is not a time: a bad argument, and exit 2 like any
+        # other. Checked first -- it is a SplitError too.
+        print(str(exc), file=sys.stderr)
+        return EXIT_USAGE
+    except split_module.SplitFailed as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_ERROR
+    except NoSpaceError as exc:
+        # A split writes a second copy of the audio, so it can run the disk
+        # down. Section 11 gives disk-below-minimum its own exit code, and the
+        # keybind branches on it.
+        print(str(exc), file=sys.stderr)
+        return EXIT_PRECONDITION
+    except split_module.SplitError as exc:
+        print(str(exc), file=sys.stderr)
+        return EXIT_PRECONDITION
+
+    # Numbered explicitly: part 1 keeps the parent's title and its minute, so
+    # its id takes the collision suffix of contracts section 2 -- and a trailing
+    # "-2" on the *first* half would otherwise read as a part number.
+    for number, part in enumerate((first, second), start=1):
+        print(
+            f"part {number}  {part.id}  {part.state}  "
+            f"{_clock(part.duration_seconds)}  {part.title}"
+        )
+    print(
+        f"{session.id} is now split; its audio is untouched and it is out of the queue"
+    )
+    return EXIT_OK
 
 
 def _cmd_event(args: argparse.Namespace) -> int:
@@ -413,6 +562,7 @@ def _config() -> Any:
 _DISPATCH = {
     "start": _cmd_start,
     "stop": _cmd_stop,
+    "split": _cmd_split,
     "toggle": _cmd_toggle,
     "status": _cmd_status,
     "list": _cmd_list,
@@ -440,7 +590,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handler(args)
     except DaemonUnreachable as exc:
-        if args.command in ("start", "stop", "toggle", "list", "event"):
+        if args.command in ("start", "stop", "split", "toggle", "list", "event"):
             print(_START_HINT, file=sys.stderr)
         else:
             print(str(exc), file=sys.stderr)

@@ -47,7 +47,7 @@ def test_the_parser_covers_every_command_in_the_contract() -> None:
     actions = [a for a in parser._actions if a.dest == "command"]
     assert actions, "there must be a subcommand slot"
     assert set(actions[0].choices) == {
-        "start", "stop", "toggle", "status", "list", "mix", "event",
+        "start", "stop", "split", "toggle", "status", "list", "mix", "event",
         "doctor", "setup", "daemon", "worker",
     }
 
@@ -254,3 +254,109 @@ def test_clock_is_hours_unbounded() -> None:
     assert cli._clock(0) == "00:00:00"
     assert cli._clock(61) == "00:01:01"
     assert cli._clock(360000) == "100:00:00"
+
+
+# --- split (D26) -----------------------------------------------------
+def test_split_now_goes_through_the_socket(fake_ipc, capsys) -> None:
+    fake = fake_ipc(
+        {
+            "session_id": "2026-09-14T1402-meeting-14-02",
+            "segment": 1,
+            "closed_id": "2026-09-14T1325-weekly-quality-sync",
+            "closed_duration_seconds": 2223.0,
+        }
+    )
+
+    code = cli.main(["split", "--now", "--title", "Supplier audit follow-up"])
+    out = capsys.readouterr().out
+
+    assert code == cli.EXIT_OK
+    assert fake.calls == [("split", {"title": "Supplier audit follow-up"})]
+    assert "captured: 2026-09-14T1325-weekly-quality-sync 00:37:03" in out
+    assert "recording: 2026-09-14T1402-meeting-14-02 segment 1" in out
+
+
+def test_split_now_maps_not_recording_to_the_precondition_code(fake_ipc) -> None:
+    fake_ipc(IpcError("not_recording", "nothing is being recorded"))
+
+    assert cli.main(["split", "--now"]) == cli.EXIT_PRECONDITION
+
+
+def test_split_now_says_how_to_start_the_daemon(fake_ipc, capsys) -> None:
+    fake_ipc(DaemonUnreachable("internal", "no socket"))
+
+    code = cli.main(["split", "--now"])
+
+    assert code == cli.EXIT_NO_DAEMON
+    assert "systemctl --user start munin.service" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "argv",
+    [
+        ["split", "--now", "2026-09-14T1325-weekly-quality-sync"],
+        ["split", "--now", "--clock", "14:02"],
+        ["split", "--now", "--title-first", "Weekly quality sync"],
+    ],
+)
+def test_split_now_refuses_the_arguments_of_a_cut(argv, capsys) -> None:
+    """--now splits where the recording is, so a cut point is a contradiction."""
+    assert cli.main(argv) == cli.EXIT_USAGE
+    assert "--now" in capsys.readouterr().err
+
+
+def test_split_needs_a_cut_point(munin_home, capsys) -> None:
+    code = cli.main(["split", "2026-09-14T1325-weekly-quality-sync"])
+
+    assert code == cli.EXIT_USAGE
+    assert "give a cut point" in capsys.readouterr().err
+
+
+def test_split_refuses_a_cut_point_and_a_clock_together(munin_home, capsys) -> None:
+    code = cli.main(
+        ["split", "2026-09-14T1325-weekly-quality-sync", "27:32", "--clock", "14:02"]
+    )
+
+    assert code == cli.EXIT_USAGE
+    assert "not both" in capsys.readouterr().err
+
+
+def test_split_names_a_session_it_cannot_find(munin_home, capsys) -> None:
+    code = cli.main(["split", "2026-09-14T1325-no-such-session", "27:32"])
+
+    assert code == cli.EXIT_USAGE
+    assert "no session" in capsys.readouterr().err
+
+
+def test_split_with_only_a_time_reaches_for_the_most_recent_session(
+    munin_home, capsys
+) -> None:
+    """``munin split 27:32`` is the common case, and it means the latest
+    session -- the same default ``munin mix`` has. With an empty spool that is a
+    precondition failure, not a usage error."""
+    code = cli.main(["split", "27:32"])
+
+    assert code == cli.EXIT_PRECONDITION
+    assert "no sessions yet" in capsys.readouterr().err
+
+
+def test_split_parses_both_titles_and_a_clock() -> None:
+    args = cli.build_parser().parse_args(
+        [
+            "split",
+            "2026-09-14T1325-weekly-quality-sync",
+            "--clock",
+            "14:02",
+            "--title",
+            "Supplier audit follow-up",
+            "--title-first",
+            "Weekly quality sync",
+        ]
+    )
+
+    assert args.session == "2026-09-14T1325-weekly-quality-sync"
+    assert args.at is None
+    assert args.clock == "14:02"
+    assert args.title == "Supplier audit follow-up"
+    assert args.title_first == "Weekly quality sync"
+    assert args.now is False

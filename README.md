@@ -20,7 +20,8 @@ exist so that adding a real backend later is one module, and captured sessions
 are left in the spool as `pending` with the reason recorded in `session.json`.
 Until a backend runs locally, `munin mix` writes the mixed-down copy of spec §10
 (`mixed.opus`, or `--format mp3`) so a meeting can still be transcribed by hand
-elsewhere.
+elsewhere. `munin split` cuts a recording that turned out to hold two meetings
+into two sessions — live at the boundary, or afterwards in the file (D26).
 macOS and Windows are designed for but not built.
 
 Frozen contracts for the PoC: [`docs/superpowers/specs/2026-09-14-poc-contracts.md`](docs/superpowers/specs/2026-09-14-poc-contracts.md)

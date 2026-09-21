@@ -23,6 +23,20 @@ def test_detected_offers_start_from_detection() -> None:
     assert note.timeout_ms == 30000
 
 
+def test_a_new_meeting_offers_a_split_and_nothing_else() -> None:
+    note = notify.new_meeting(
+        'Beacon 365', '14:02', session_id='2026-09-14T1325-weekly-quality-sync'
+    )
+    assert note.title == 'New meeting detected'
+    assert 'Beacon 365' in note.body and '14:02' in note.body
+    assert note.action == ('munin', 'split', '--now')
+    # D4 and D26: a start-shaped decision, so nothing critical about it, and
+    # long enough on screen to answer while walking between two meetings.
+    assert note.urgency == 'normal'
+    assert note.timeout_ms == 60000
+    assert note.replaces_id == notify.replace_id_for('2026-09-14T1325-weekly-quality-sync')
+
+
 def test_ending_soon_offers_stop() -> None:
     note = notify.ending_soon(60, session_id="2026-09-14T1325-weekly-quality-sync")
     assert note.title == "Meeting seems over"

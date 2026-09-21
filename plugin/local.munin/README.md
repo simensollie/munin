@@ -46,6 +46,7 @@ window title is never re-tokenized by a shell:
 | A process starts holding a playback **and** a capture stream, *and* the rule table identifies it | `munin event call-started [--pid N] [--app LABEL] [--app-id ID] [--handle SERIAL] [--title T]` |
 | That process stops holding both | `munin event call-ended [--pid N]` |
 | Panel primary button, bar middle-click | `munin start [--from-detection\|--resume]` / `munin stop` |
+| Panel secondary button while recording | `munin split --now` — one recording holding two meetings is cut here (D26, spec §6.4) |
 | Bar right-click | `munin toggle` |
 | Panel opens | `munin list --json --limit 5` |
 | Panel folder rows | `xdg-open` on `$MUNIN_HOME` or a session directory |

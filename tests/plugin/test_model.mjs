@@ -470,9 +470,33 @@ test("the grace period offers Keep recording, which nothing else can", () => {
     label: "Keep recording",
     argv: ["munin", "event", "call-started"],
   });
-  for (const s of ["idle", "detected", "recording", "captured", "done", "failed"]) {
+  for (const s of ["idle", "detected", "captured", "done", "failed"]) {
     assert.equal(M.secondaryAction(s), null, s);
   }
+});
+
+test("a split parent reads as settled, not as queued work (D26)", () => {
+  // Through parseSessions, the way the widget actually gets there: a state the
+  // list does not know is coerced to "unknown" and painted as a failure, so
+  // asserting on sessionGlyph("split") alone would pass while the panel lied.
+  const rows = M.parseSessions(
+    JSON.stringify({ sessions: [{ id: "s1", state: "split", title: "Weekly quality sync" }] }),
+  );
+  assert.equal(rows[0].state, "split");
+  assert.equal(M.sessionGlyph(rows[0].state), M.sessionGlyph("done"));
+  assert.notEqual(M.sessionGlyph(rows[0].state), M.sessionGlyph("failed"));
+  assert.notEqual(M.sessionGlyph(rows[0].state), M.sessionGlyph("pending"));
+  assert.match(M.sessionMeta(rows[0]), /split in two/);
+});
+
+test("a running recording offers Split here (D26)", () => {
+  assert.deepEqual(M.secondaryAction("recording"), {
+    label: "Split here",
+    argv: ["munin", "split", "--now"],
+  });
+  // The grace period keeps Keep recording: it is the contracted action, and it
+  // is the one a two-minute countdown makes urgent.
+  assert.equal(M.secondaryAction("ending").label, "Keep recording");
 });
 
 // --------------------------------------------------------- shape contract
