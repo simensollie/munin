@@ -27,8 +27,13 @@ from munin.mixdown import (
     DEFAULT_FORMAT,
     FORMATS,
     MixdownError,
+    exported_ids,
     existing_mixes,
     export_filename,
+    forget_export,
+    is_exported,
+    ledger_entry,
+    mark_exported,
     mix_argv,
     mix_format,
     mixdown,
@@ -452,3 +457,104 @@ def test_mix_format_mp3_writes_the_fallback(spool: Spool, two_track, capsys) -> 
 def test_mix_rejects_a_format_plaud_does_not_take(spool: Spool) -> None:
     with pytest.raises(SystemExit):
         cli.build_parser().parse_args(["mix", "--format", "flac"])
+
+
+# --- the upload folder's ledger ---------------------------------------
+
+
+def test_the_ledger_is_empty_until_something_is_exported(tmp_path: Path) -> None:
+    folder = tmp_path / "plaud-upload"
+    assert exported_ids(folder) == []
+    assert not is_exported(folder, "2026-09-14T1325-weekly-quality-sync")
+    assert not forget_export(folder, "2026-09-14T1325-weekly-quality-sync")
+
+
+def test_marking_creates_the_folder_and_forgetting_undoes_it(tmp_path: Path) -> None:
+    folder = tmp_path / "plaud-upload"
+    entry = mark_exported(folder, "2026-09-14T1325-weekly-quality-sync", filename="x.opus")
+
+    assert entry == ledger_entry(folder, "2026-09-14T1325-weekly-quality-sync")
+    assert is_exported(folder, "2026-09-14T1325-weekly-quality-sync")
+    assert exported_ids(folder) == ["2026-09-14T1325-weekly-quality-sync"]
+    assert forget_export(folder, "2026-09-14T1325-weekly-quality-sync")
+    assert not is_exported(folder, "2026-09-14T1325-weekly-quality-sync")
+
+
+def test_the_ledger_sorts_chronologically(tmp_path: Path) -> None:
+    """Session ids start with their own date and time, so plain name order is
+    meeting order -- worth pinning, since it is why nothing stores a timestamp
+    to sort by."""
+    folder = tmp_path / "plaud-upload"
+    for session_id in ("2026-09-18T0900-b", "2026-09-14T1325-a", "2026-09-18T1200-c"):
+        mark_exported(folder, session_id)
+
+    assert exported_ids(folder) == [
+        "2026-09-14T1325-a",
+        "2026-09-18T0900-b",
+        "2026-09-18T1200-c",
+    ]
+
+
+def test_mix_to_a_folder_marks_the_session_exported(
+    spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    """By hand or by the worker, a copy into the folder is a turn in the folder;
+    otherwise deleting a hand-made copy would summon a worker-made one.
+    """
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+    target = tmp_path / "plaud-upload"
+
+    assert cli.main(["mix", session.id, "--to", str(target)]) == cli.EXIT_OK
+
+    assert is_exported(target, session.id)
+
+
+def test_mix_all_skips_what_the_folder_already_carried(
+    spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    """Without this, one `munin mix --all` undoes the ledger by refilling the
+    folder with every meeting ever uploaded and cleared.
+    """
+    target = tmp_path / "plaud-upload"
+    old = _captured_session(spool, two_track, title="Supplier review")
+    assert cli.main(["mix", old.id, "--to", str(target)]) == cli.EXIT_OK
+    (target / f"{old.id}.opus").unlink()
+    fresh = _captured_session(spool, two_track, title="Weekly quality sync")
+    capsys.readouterr()
+
+    assert cli.main(["mix", "--all", "--to", str(target)]) == cli.EXIT_OK
+
+    out = capsys.readouterr().out
+    assert (target / f"{fresh.id}.opus").exists()
+    assert not (target / f"{old.id}.opus").exists()
+    assert "1 already exported" in out
+
+
+def test_naming_a_session_puts_back_a_file_deleted_by_accident(
+    spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    """The escape hatch the ledger needs: nothing self-heals any more, so a
+    deliberate re-export has to be one command. A session named on the command
+    line is that ask -- only `--all` consults the ledger.
+    """
+    target = tmp_path / "plaud-upload"
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+    assert cli.main(["mix", session.id, "--to", str(target)]) == cli.EXIT_OK
+    (target / f"{session.id}.opus").unlink()
+
+    assert cli.main(["mix", session.id, "--to", str(target)]) == cli.EXIT_OK
+
+    assert (target / f"{session.id}.opus").exists()
+
+
+def test_mix_all_force_refills_the_whole_folder(
+    spool: Spool, two_track, tmp_path: Path, capsys
+) -> None:
+    target = tmp_path / "plaud-upload"
+    session = _captured_session(spool, two_track, title="Weekly quality sync")
+    assert cli.main(["mix", "--all", "--to", str(target)]) == cli.EXIT_OK
+    (target / f"{session.id}.opus").unlink()
+
+    assert cli.main(["mix", "--all", "--to", str(target), "--force"]) == cli.EXIT_OK
+
+    assert (target / f"{session.id}.opus").exists()

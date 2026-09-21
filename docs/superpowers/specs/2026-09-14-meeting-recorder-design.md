@@ -840,9 +840,9 @@ the number of inputs, which lands both tracks 6 dB down and buries a headset
 microphone that already sits ~8 dB under the meeting track.
 
 ```
-munin export --since 2026-09-01 --to ~/plaud-upload
-munin list --not-uploaded
-munin mark-uploaded <session>
+munin mix --all                 # everything the folder has not carried yet
+munin mix <session>             # one meeting, including a file cleared by mistake
+munin mix <session> --force     # re-encode as well as re-copy
 ```
 
 Exported filenames carry the session directory name, so a file in the upload
@@ -851,10 +851,33 @@ meeting's own date and time, which nothing else does. Observed on the first real
 upload (2026-09-17): the importer stamps `Date created` at the moment of upload,
 whenever you got round to it, and replaces the filename with its own generated
 title only once a summary finishes, never if that fails. Uploading the file
-under its in-session name means every meeting arrives called `mixed`.
-Upload state lives in session metadata, so the outstanding set is always
-queryable. The upload itself is a manual drag into Plaud's web importer; munin
-does not automate it (Appendix A).
+under its in-session name means every meeting arrives called `mixed`. The upload
+itself is a manual drag into Plaud's web importer; munin does not automate it
+(Appendix A).
+
+**Exported once, ever.** The folder is a queue: what is in it still needs
+uploading, and uploading a meeting ends with deleting or moving the file. The
+first automated version could not tell that apart from "never exported" and put
+every cleared file straight back, so the queue refilled itself behind the user.
+Each session therefore gets a marker in `~/plaud-upload/.exported/`, named for
+the session, written after the copy lands, and the sweep skips anything it
+already holds. What is left in the folder is exactly what still needs uploading.
+
+This section originally asked for `munin list --not-uploaded` and
+`munin mark-uploaded <session>`, with upload state in session metadata. That is
+the more capable design — it can answer "which meetings were never uploaded" for
+a session whose file is long gone — and it is rejected anyway: it puts a
+`session.json` field on a surface D25 deletes, and makes a re-encode look like a
+capture event (contracts §7.2). The marker costs neither and is deleted with the
+folder. The price is that the ledger knows only what the folder carried, never
+what Plaud actually received; a browser upload that silently failed looks the
+same as one that worked. Confirming an upload is still done by looking at
+Plaud, which is true of the manual route too.
+
+Nothing self-heals any more: a file deleted by mistake stays deleted until
+`munin mix <session>` is run. That is deliberate. A folder that quietly
+recreates files you removed is the failure mode that was actually observed;
+a folder that needs one command after a mistake is not.
 
 ## 11. Failure handling
 

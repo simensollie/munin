@@ -104,7 +104,11 @@ def build_parser() -> argparse.ArgumentParser:
     mix.add_argument(
         "session", nargs="?", default=None, help="session id; default is the most recent"
     )
-    mix.add_argument("--all", action="store_true", help="every session that has no mix yet")
+    mix.add_argument(
+        "--all",
+        action="store_true",
+        help="every session the upload folder has not already carried",
+    )
     mix.add_argument(
         "--format",
         dest="format",
@@ -112,7 +116,11 @@ def build_parser() -> argparse.ArgumentParser:
         default=None,
         help="upload format; opus is a third the size of mp3 at better quality (spec 10)",
     )
-    mix.add_argument("--force", action="store_true", help="re-encode even if mixed.mp3 exists")
+    mix.add_argument(
+        "--force",
+        action="store_true",
+        help="re-encode, and re-copy a session already exported once",
+    )
     mix.add_argument(
         "--to",
         default=None,
@@ -360,6 +368,19 @@ def _cmd_mix(args: argparse.Namespace) -> int:
     if destination is not None:
         destination.mkdir(parents=True, exist_ok=True)
 
+    # `--all` follows the folder's ledger: a session it has already carried has
+    # had its turn, and re-copying it would undo the point of the ledger by
+    # refilling the folder with meetings that were uploaded and cleared weeks
+    # ago. A session named on the command line is an explicit ask and is done
+    # regardless -- that, and `--force`, are how an accidental deletion is put
+    # back.
+    skipped = 0
+    if args.all and destination is not None and not args.force:
+        already_exported = set(mixdown_module.exported_ids(destination))
+        remaining = [s for s in sessions if s.id not in already_exported]
+        skipped = len(sessions) - len(remaining)
+        sessions = remaining
+
     failed = 0
     for session in sessions:
         already = (
@@ -377,6 +398,7 @@ def _cmd_mix(args: argparse.Namespace) -> int:
         if destination is not None:
             copy = destination / mixdown_module.export_filename(session.id, fmt)
             shutil_module.copy2(path, copy)
+            mixdown_module.mark_exported(destination, session.id, filename=copy.name)
             line += f"  -> {copy}"
         print(line)
         if (session.duration_seconds or 0) > mixdown_module.PLAUD_MAX_SECONDS:
@@ -384,6 +406,10 @@ def _cmd_mix(args: argparse.Namespace) -> int:
                 f"{session.id}: longer than Plaud's 5-hour limit; split it before uploading",
                 file=sys.stderr,
             )
+    if skipped:
+        print(
+            f"{skipped} already exported to {destination}; name one or pass --force to redo"
+        )
     return EXIT_ERROR if failed else EXIT_OK
 
 
