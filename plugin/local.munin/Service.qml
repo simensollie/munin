@@ -285,8 +285,51 @@ Item {
             finishResolve(ipc);
             return;
         }
-        procFile.path = "/proc/" + service.resolvePid + "/status";
-        procFile.reload();
+        readProc();
+    }
+
+    // Every /proc read goes through here, and every one of them is deferred by
+    // a zero-interval timer rather than started where it was decided.
+    //
+    // Verified on this machine: a FileView whose `path` is reassigned from
+    // inside its own `onLoaded` emits nothing for the new path -- no
+    // `onLoaded`, no `onLoadFailed`, no error. The first hop of a parent walk
+    // lands, the second is swallowed, and `resolveCurrent` is left set
+    // forever. `queueResolve` only starts a walk when nothing is resolving, so
+    // one swallowed hop stops every future detection for the life of the shell
+    // process: the calls queue up behind a walk that can never finish. That is
+    // a plugin that works after a restart and silently stops later, which is
+    // the worst shape a bug like this can take.
+    //
+    // A single-shot timer takes the assignment out of the signal handler, and
+    // the walk then runs to its end. `watchdog` is the belt to this brace: a
+    // hop that produces no signal at all costs one missed detection, never
+    // every detection after it.
+    Timer {
+        id: procRead
+        interval: 0
+        repeat: false
+        onTriggered: {
+            procFile.path = "/proc/" + service.resolvePid + "/status";
+            procFile.reload();
+        }
+    }
+
+    function readProc() {
+        watchdog.restart();
+        procRead.restart();
+    }
+
+    // A walk that produces no signal must not be able to hold the queue. The
+    // call is still reported if PipeWire alone identified it (`client_name` or
+    // `binary`, spec 6.3 condition 2); what is lost is the window title.
+    Timer {
+        id: watchdog
+        interval: 3000
+        repeat: false
+        onTriggered: {
+            if (service.resolveCurrent) service.finishResolve(null);
+        }
     }
 
     function stepResolve(text) {
@@ -302,8 +345,7 @@ Item {
             return;
         }
         service.resolvePid = ppid;
-        procFile.path = "/proc/" + ppid + "/status";
-        procFile.reload();
+        readProc();
     }
 
     function parsePpid(text) {
@@ -317,6 +359,7 @@ Item {
     }
 
     function finishResolve(ipc) {
+        watchdog.stop();
         var call = service.resolveCurrent;
         service.resolveCurrent = null;
         if (call) {
@@ -354,7 +397,13 @@ Item {
 
     function rescan() {
         var calls = Model.liveCalls(ownersFromNodes());
-        var diff = Model.diffCalls(service.liveCalls, calls);
+        // Against `reportedCalls`, not `liveCalls`: what matters is the
+        // difference from what the daemon was actually told. Diffing the last
+        // scan instead meant a call that went live while the daemon was down
+        // was absorbed by the scan below and never mentioned again, because
+        // the edge had already been consumed by the time there was anybody to
+        // tell.
+        var diff = Model.diffCalls(service.reportedCalls, calls);
         service.liveCalls = calls;
 
         if (!service.daemonRunning) {

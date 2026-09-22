@@ -1265,6 +1265,17 @@ running system.
   `actionsSupported: true`.
 - **`Quickshell.Services.Pipewire` is usable from plugin QML** — nodes, streams,
   `isSink`, `isStream`. No `pw-dump` polling needed.
+- **A `FileView` will not walk.** Reassigning `path` from inside that same
+  `FileView`'s `onLoaded` emits nothing for the new path: no `onLoaded`, no
+  `onLoadFailed`, no error (verified 2026-09-22, Quickshell in Omarchy 4.0.0).
+  Reassigning `path` and calling `reload()` from a zero-interval `Timer`
+  instead works, and so does calling `reload()` repeatedly on an unchanged
+  path. This matters because the plugin identifies a call by walking `/proc`
+  from the audio process to the process that owns the window (§6.3): the audio
+  stream of every Chromium-based client, Teams included, belongs to a child
+  process that owns no window. Any code that chains reads through one
+  `FileView` stops after the first and leaves its caller waiting for a signal
+  that never comes.
 - **`qs.Ui` provides the panel furniture**: `Panel` (bar button + popup + an
   `IpcHandler` with open/close/toggle), `BarIndicator`, `BarWidget`, `PanelHero`,
   `PanelSectionHeader`, `PanelSlider`, `PanelSeparator`, `PanelActionButton`.

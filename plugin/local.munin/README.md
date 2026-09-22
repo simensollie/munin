@@ -142,6 +142,18 @@ process is not the process that owns the window, so an unmatched pid is walked
 up `/proc/<pid>/status` `PPid` for at most five hops, asynchronously, and gives
 up quietly rather than failing.
 
+Each hop of that walk is started from a zero-interval `Timer`, never from the
+`FileView`'s own `onLoaded`. A `FileView` whose `path` is reassigned inside its
+own `onLoaded` emits nothing for the new path — no `onLoaded`, no
+`onLoadFailed` (Appendix D, verified 2026-09-22). Chained directly, the walk
+stopped after its first hop with `resolveCurrent` still set, and because a walk
+only starts when nothing else is resolving, every later call queued behind one
+that could never finish: detection worked until the first call that needed two
+hops, then never again for the life of the shell process. A 3 s watchdog is the
+second line: a hop that produces no signal at all now costs one window title,
+not every detection after it. A call PipeWire alone identified (client name or
+binary) is still reported when the watchdog fires.
+
 `PwNode.properties` is only read on a node that reports `ready`, and every
 stream node is held in a `PwObjectTracker` — `panels/audio/Panel.qml` warns
 that reading properties off an unbound node while capture streams appear can
