@@ -483,27 +483,37 @@ Panel {
                     }
 
                     // --- actions -------------------------------------------
+                    //
+                    // Resume and New recording (and Stop and Split here) are
+                    // a pair and share a row. Open session does not join
+                    // that row: three buttons at their natural width are
+                    // wider than the panel, and the flickable clips the
+                    // overflow, which is how the third label became "Open".
 
-                    Row {
+                    Column {
                         width: parent.width
                         spacing: Style.space(8)
 
-                        Button {
-                            text: Model.primaryActionFor(root.status, root.nowMs).label
-                            iconText: root.counting ? Model.GLYPH_STOP : ""
-                            bordered: true
-                            foreground: root.counting ? root.urgent : root.foreground
-                            fontFamily: root.fontFamily
-                            onClicked: root.runPrimary()
-                        }
+                        Row {
+                            spacing: Style.space(8)
 
-                        Button {
-                            visible: root.secondary !== null
-                            text: root.secondary ? root.secondary.label : ""
-                            bordered: true
-                            foreground: root.foreground
-                            fontFamily: root.fontFamily
-                            onClicked: root.runSecondary()
+                            Button {
+                                text: Model.primaryActionFor(root.status, root.nowMs).label
+                                iconText: root.counting ? Model.GLYPH_STOP : ""
+                                bordered: true
+                                foreground: root.counting ? root.urgent : root.foreground
+                                fontFamily: root.fontFamily
+                                onClicked: root.runPrimary()
+                            }
+
+                            Button {
+                                visible: root.secondary !== null
+                                text: root.secondary ? root.secondary.label : ""
+                                bordered: true
+                                foreground: root.foreground
+                                fontFamily: root.fontFamily
+                                onClicked: root.runSecondary()
+                            }
                         }
 
                         Button {
