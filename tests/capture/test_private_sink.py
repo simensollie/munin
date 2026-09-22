@@ -32,6 +32,7 @@ from munin.capture.private_sink import (
     list_modules_command,
     list_sink_inputs_command,
     load_loopback_command,
+    SETTLE_SECONDS,
     load_null_sink_command,
     move_sink_input_command,
     owns_stream,
@@ -407,6 +408,9 @@ def chromium_runner() -> FakeRunner:
 
 def make_sink(runner: FakeRunner, pid: int = CHROMIUM_PID, **kwargs) -> PrivateSink:
     kwargs.setdefault("watch", False)
+    # The settle window is real time on a real machine and nothing at all in a
+    # test; a test that wants to see it passes its own recorder.
+    kwargs.setdefault("sleep", lambda _seconds: None)
     return PrivateSink(str(pid), pid, runner=runner, **kwargs)
 
 
@@ -426,6 +430,34 @@ def test_open_creates_the_sink_then_the_loopback_then_moves_the_streams(chromium
     ]
     assert sink.moves == 5
     assert chromium_runner.sink_of(9310) == DEFAULT_SINK_INDEX, "the music never moved"
+
+
+def test_the_loopback_settles_on_silence_before_the_meeting_goes_through_it(chromium_runner):
+    """The crackle a user hears on `munin start` mid-call, and why the wait is here.
+
+    A null sink has no clock of its own, so the loopback drives the path and
+    its resampler converges on the rate of whatever it is feeding. Moving the
+    application's streams before that has happened puts the meeting through
+    the convergence. The wait has to fall after the loopback is loaded and
+    before the first move -- anywhere else and it buys nothing.
+    """
+    waits: list[float] = []
+    sink = make_sink(chromium_runner, sleep=waits.append)
+    assert sink.open() is True
+
+    assert waits == [SETTLE_SECONDS]
+    verbs = chromium_runner.verbs()
+    assert verbs.index("load munin-app-4310.monitor") < verbs.index(
+        "move 9301->munin-app-4310"
+    ), "the loopback is loaded before the streams are moved"
+
+
+def test_a_settle_of_zero_waits_not_at_all(chromium_runner):
+    """A caller that has its own timing is not made to wait by this module."""
+    waits: list[float] = []
+    sink = make_sink(chromium_runner, settle_seconds=0, sleep=waits.append)
+    assert sink.open() is True
+    assert waits == []
 
 
 def test_a_stream_created_mid_call_is_picked_up_by_the_next_pass(chromium_runner):

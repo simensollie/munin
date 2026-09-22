@@ -63,6 +63,7 @@ import os
 import re
 import subprocess
 import threading
+import time
 from dataclasses import dataclass
 from typing import Any, Callable, Iterable, Mapping, Sequence
 
@@ -103,6 +104,20 @@ SINK_PREFIX = "munin-app-"
 #: user's own voice through the meeting does not feel delayed; lower values
 #: start to crackle on a busy machine.
 DEFAULT_LATENCY_MSEC = 30
+
+#: How long the loopback is left running on silence before any real audio is
+#: put through it.
+#:
+#: A null sink has no clock of its own -- ``pw-top`` reports it with neither a
+#: quantum nor a rate -- so the loopback drives the path and its adaptive
+#: resampler has to converge on the rate of whatever device it is feeding.
+#: Moving the application's streams in the same breath as loading the module
+#: puts the meeting through that convergence, which is the crackle a user
+#: hears for about a second after pressing record mid-call. Converging on
+#: silence costs nothing and is over before the first sample of the meeting
+#: arrives. The cost is up to this much meeting audio at the very start of the
+#: recording, still going to the speakers rather than into the file.
+SETTLE_SECONDS = 0.2
 
 #: How often the watcher looks for streams the application created after the
 #: recording started. Chromium does this mid-call. The daemon's health tick is
@@ -549,6 +564,8 @@ class PrivateSink:
         latency_msec: int = DEFAULT_LATENCY_MSEC,
         watch: bool = True,
         watch_interval: float | None = None,
+        settle_seconds: float = SETTLE_SECONDS,
+        sleep: Callable[[float], None] = time.sleep,
     ) -> None:
         self.name = sink_name_for(token)
         self.pid = pid
@@ -557,6 +574,8 @@ class PrivateSink:
         self._run: Runner = runner or subprocess_runner(env)
         self._ppid_of = ppid_of
         self._latency_msec = latency_msec
+        self._settle_seconds = settle_seconds
+        self._sleep = sleep
         self._watch = watch
         # Read at construction, not bound as a default, so a test can slow
         # the watcher down to never without reaching into the instance.
@@ -610,6 +629,11 @@ class PrivateSink:
             self.sink_module = None
             return False
         self.loopback_module = loop_index
+
+        # Let the loopback converge before the meeting goes through it, not
+        # while it does. See SETTLE_SECONDS.
+        if self._settle_seconds > 0:
+            self._sleep(self._settle_seconds)
 
         self.sink_index = self._sink_index(self.name)
         self.route()
