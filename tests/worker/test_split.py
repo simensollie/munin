@@ -23,6 +23,7 @@ from typing import Callable, NamedTuple
 
 import pytest
 
+from munin.mixdown import export_name
 from munin import cli
 from munin import config as config_module
 from munin import split as split_module
@@ -733,9 +734,10 @@ def test_the_worker_leaves_a_split_parent_alone(
 
     Worker(config).drain()
 
-    exported = sorted(path.stem for path in destination.glob("*.opus"))
-    assert exported == sorted([first.id, second.id])
-    assert not (destination / f"{session.id}.opus").exists()
+    exported = sorted(path.name for path in destination.glob("*.opus"))
+    assert exported == sorted([export_name(first), export_name(second)])
+    assert len(set(exported)) == 2, "two halves, two files"
+    assert not (destination / export_name(session)).exists()
     assert not (session.directory / "mixed.opus").exists()
 
 

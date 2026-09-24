@@ -24,7 +24,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
 from pathlib import Path
-from typing import Iterator, Literal
+from typing import Callable, Iterator, Literal
 
 import munin
 from munin.capture.base import segment_filenames
@@ -268,7 +268,9 @@ class Session:
     stopped_at: datetime | None = None
     duration_seconds: float | None = None
     app: dict | None = None
-    calendar_event_id: None = None
+    #: The Outlook event the session was matched to by time overlap (spec 7.6),
+    #: or ``None`` for an ad-hoc call or with [m365] off.
+    calendar_event_id: str | None = None
     segments: list[Segment] = field(default_factory=list)
     checksums: dict[str, str] = field(default_factory=dict)
     pending_reason: str | None = None
@@ -284,6 +286,12 @@ class Session:
     #: that was never split. Together with ``split_from`` this is what makes a
     #: derived transcript traceable to the capture it came from (spec 12).
     split_into: list[str] | None = None
+    #: Where the title came from when it is not the capture-time default, and
+    #: what it was before (spec 7.6): ``{"title_from": "calendar"|"direct-call"|
+    #: null, "original_title": str|null, "decided_at": iso|null}``. ``None``
+    #: until something looked. The title is the one field enrichment may change
+    #: after capture; this is the record that it did.
+    enrichment: dict | None = None
     #: Keys written by a newer build, kept so a round trip does not lose them.
     extra: dict = field(default_factory=dict)
 
@@ -335,6 +343,7 @@ class Session:
             "transcript": dict(self.transcript) or {"txt": None, "json": None},
             "split_from": dict(self.split_from) if self.split_from else None,
             "split_into": list(self.split_into) if self.split_into else None,
+            "enrichment": dict(self.enrichment) if self.enrichment else None,
             "history": [dict(entry) for entry in self.history],
         }
         for key, value in self.extra.items():
@@ -379,6 +388,7 @@ class Session:
             "transcript",
             "split_from",
             "split_into",
+            "enrichment",
             "history",
         }
         return cls(
@@ -405,6 +415,7 @@ class Session:
             transcript=dict(data.get("transcript") or {}),
             split_from=dict(data["split_from"]) if data.get("split_from") else None,
             split_into=list(data["split_into"]) if data.get("split_into") else None,
+            enrichment=dict(data["enrichment"]) if data.get("enrichment") else None,
             history=[dict(entry) for entry in data.get("history", [])],
             extra={k: v for k, v in data.items() if k not in known},
         )
@@ -451,6 +462,25 @@ class Session:
         with self.lock():
             self._apply(fields)
             self.save()
+
+    def merge(self, fields: dict, *, unless: "Callable[[Session], bool] | None" = None) -> bool:
+        """Set fields on the record *as it is on disk now*, under the lock.
+
+        ``update`` saves this object, which is whatever was read at the start of
+        a sweep; a writer that spent seconds on the network in between would put
+        back a stale state, segments and history over a resume the recorder made
+        meanwhile. This re-reads first and writes only ``fields``. ``unless``
+        sees the fresh record and can decline, which is how the worker backs off
+        a session the recorder has taken back. Returns whether it wrote.
+        """
+        with self.lock():
+            fresh = self.reload()
+            if unless is not None and unless(fresh):
+                return False
+            fresh._apply(fields)
+            fresh.save()
+        self._apply(fields)
+        return True
 
     def _apply(self, fields: dict) -> None:
         for key, value in fields.items():
@@ -563,6 +593,8 @@ class Spool:
         app: dict | None = None,
         now: datetime | None = None,
         capture_method: str | None = None,
+        calendar_event_id: str | None = None,
+        enrichment: dict | None = None,
     ) -> Session:
         """Make the directory, write the first ``session.json``, update ``latest``.
 
@@ -618,6 +650,8 @@ class Spool:
             munin_version=munin.__version__,
             created_at=created,
             app=app,
+            calendar_event_id=calendar_event_id,
+            enrichment=enrichment,
             transcript={"txt": None, "json": None},
             history=[
                 {

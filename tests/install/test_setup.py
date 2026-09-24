@@ -82,6 +82,9 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
     # party, so the amendment of 2026-09-18 made it opt-in once, not opt-out.
     assert data["export"]["enabled"] is False
     assert data["export"]["format"] == "opus"
+    # Off in the template too: it reads the calendar and chats (spec 7.6, 12).
+    assert data["m365"]["enabled"] is False
+    assert data["m365"]["tenant_id"] == ""
     # D24: no second-brain copy, so no section configuring where it goes.
     assert set(data) == {
         "munin",
@@ -92,6 +95,7 @@ def test_default_config_is_parseable_and_complete(tmp_path: Path) -> None:
         "idle",
         "notifications",
         "export",
+        "m365",
     }
 
 

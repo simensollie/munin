@@ -191,6 +191,16 @@ def build_parser() -> argparse.ArgumentParser:
         help="create the data root and config.toml, then exit (used by install.sh)",
     )
 
+    m365_cmd = sub.add_parser(
+        "m365", help="Microsoft 365 sign-in for calendar and call names (spec 7.6)"
+    )
+    m365_cmd.add_argument(
+        "action",
+        choices=("login", "status", "logout", "refresh"),
+        help="login: device-code sign-in; refresh: fetch the calendar now",
+    )
+    m365_cmd.add_argument("--json", action="store_true")
+
     daemon = sub.add_parser("daemon", help="run munin-rec")
     daemon.add_argument("--foreground", action="store_true", default=True)
     daemon.add_argument("--verbose", action="store_true")
@@ -394,7 +404,7 @@ def _cmd_mix(args: argparse.Namespace) -> int:
         if already:
             line += "  (already mixed)"
         if destination is not None:
-            copy = destination / mixdown_module.export_filename(session.id, fmt)
+            copy = destination / mixdown_module.export_name(session, fmt)
             shutil_module.copy2(path, copy)
             mixdown_module.mark_exported(destination, session.id, filename=copy.name)
             line += f"  -> {copy}"
@@ -538,6 +548,74 @@ def _cmd_doctor(args: argparse.Namespace) -> int:
     return int(doctor.main(_config(), as_json=bool(args.json)))
 
 
+def _cmd_m365(args: argparse.Namespace) -> int:
+    """Sign in, sign out, or look. Talks to Microsoft directly, never to munin-rec.
+
+    ``login`` is the OAuth device-code flow: it prints a code and a URL, and
+    waits while you enter the code in any browser. The refresh token goes to the
+    desktop keyring; nothing is written to a file.
+    """
+    from datetime import timedelta
+
+    from munin import m365
+    from munin.config import load
+    from munin.enrich import Enricher
+
+    config = load()
+    settings = config.m365
+    if not (settings.tenant_id and settings.client_id):
+        print(
+            "[m365] tenant_id and client_id are not set in config.toml", file=sys.stderr
+        )
+        return EXIT_PRECONDITION
+    graph = m365.Graph.from_settings(settings)
+
+    if args.action == "login":
+        if not m365.Keyring.available():
+            print("secret-tool not found; install libsecret first", file=sys.stderr)
+            return EXIT_PRECONDITION
+        flow = graph.start_device_login()
+        print(flow.get("message") or f"Open {flow['verification_uri']} and enter {flow['user_code']}")
+        sys.stdout.flush()
+        graph.finish_device_login(flow)
+        print("signed in")
+        if not settings.enabled:
+            print("note: [m365] enabled is false, so munin does not use it yet")
+        return EXIT_OK
+
+    if args.action == "logout":
+        graph.sign_out()
+        print("signed out; the keyring entry is removed")
+        return EXIT_OK
+
+    if args.action == "refresh":
+        enricher = Enricher(config, graph=graph)
+        if not settings.enabled:
+            print("[m365] enabled is false", file=sys.stderr)
+            return EXIT_PRECONDITION
+        if not enricher.refresh_calendar(force=True):
+            print("calendar refresh failed; see munin.log", file=sys.stderr)
+            return EXIT_ERROR
+        # fall through to status
+
+    events = m365.read_calendar(config.home, max_age=timedelta(days=3650))
+    payload = {
+        "enabled": settings.enabled,
+        "signed_in": graph.signed_in(),
+        "calendar": str(m365.calendar_path(config.home)),
+        "events": len(events),
+    }
+    if args.json:
+        _emit(payload)
+    else:
+        print(
+            f"enabled: {str(payload['enabled']).lower()}  "
+            f"signed in: {str(payload['signed_in']).lower()}  "
+            f"cached events: {payload['events']}"
+        )
+    return EXIT_OK
+
+
 def _cmd_setup(args: argparse.Namespace) -> int:
     from munin import setup
 
@@ -604,6 +682,7 @@ _DISPATCH = {
     "event": _cmd_event,
     "doctor": _cmd_doctor,
     "setup": _cmd_setup,
+    "m365": _cmd_m365,
     "daemon": _cmd_daemon,
     "worker": _cmd_worker,
 }

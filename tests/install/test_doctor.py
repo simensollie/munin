@@ -389,3 +389,27 @@ def test_export_without_a_worker_unit_is_a_failure(
     )
     assert checks["worker unit"].status == "fail"
     assert "[export] is enabled" in checks["worker unit"].detail
+
+
+# -- m365 (spec 7.6) --------------------------------------------------------------
+
+
+def test_m365_off_is_ok_and_says_how_sessions_are_named(installed: FakeMachine) -> None:
+    checks = _run(installed)
+    assert checks["m365"].status == "ok"
+    assert "clock" in checks["m365"].detail
+
+
+def test_m365_without_a_keyring_tool_warns_rather_than_fails(installed: FakeMachine) -> None:
+    from munin.config import M365Config
+
+    config = Config(
+        home=installed.data_home,
+        m365=M365Config(enabled=True, tenant_id="t", client_id="c"),
+    )
+    installed.env["PATH"] = str(installed.home / "no-such-bin")
+    checks = _by_name(
+        run_checks(config, home=installed.home, env=installed.env, platform="linux")
+    )
+    assert checks["m365"].status == "warn"
+    assert "secret-tool" in checks["m365"].detail

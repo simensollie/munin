@@ -68,7 +68,9 @@ import subprocess
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Sequence
+from typing import Any, Sequence
+
+from munin.paths import slugify
 
 __all__ = [
     "MIXED_STEM",
@@ -87,6 +89,7 @@ __all__ = [
     "mix_argv",
     "mixdown",
     "export_filename",
+    "export_name",
     "LEDGER_DIRNAME",
     "ledger_dir",
     "ledger_entry",
@@ -94,6 +97,7 @@ __all__ = [
     "mark_exported",
     "forget_export",
     "exported_ids",
+    "ledger_owner",
 ]
 
 log = logging.getLogger("munin.mixdown")
@@ -236,6 +240,64 @@ def export_filename(session_id: str, fmt: str | MixFormat = DEFAULT_FORMAT) -> s
     return f"{session_id}.{resolved.extension}"
 
 
+#: Characters a filename cannot carry on at least one of the systems the file
+#: may pass through on its way to the importer.
+_UNSAFE = set('/\\:*?"<>|')
+
+#: Longest title kept in an export name, in characters. Well under any
+#: filesystem limit, and about what an importer's list view shows.
+EXPORT_TITLE_MAX = 90
+
+
+def export_name(session: Any, fmt: str | MixFormat = DEFAULT_FORMAT) -> str:
+    """``<YYYY-MM-DDTHHMM> <title>.<ext>`` -- the export name since M9.
+
+    The importer keeps the filename as the recording's title for good (spec 10,
+    corrected 2026-09-24), so the file carries the real title rather than its
+    slug: ``2026-09-23T0901 QMS risk review.opus`` reads as a meeting, where
+    ``2026-09-23T0901-qms-risk-review`` reads as a path. The stamp stays first,
+    because it is still the only thing that knows when the meeting was, and it
+    keeps the folder in chronological order.
+
+    A clock-fallback title (``Microsoft Teams 09:01``) loses its clock, which
+    the stamp already says. Anything a filesystem refuses is dropped, a
+    ``: `` separator becomes `` - ``, and a long subject is cut at a word.
+    The ledger is keyed by session id, never by this name (contracts
+    amendment 2026-09-21), so a title that changes after export does not
+    export the session twice.
+
+    >>> class S: id = "2026-09-17T0913-weekly-quality-sync"; title = "Weekly quality sync"
+    >>> export_name(S)
+    '2026-09-17T0913 Weekly quality sync.opus'
+    """
+    resolved = fmt if isinstance(fmt, MixFormat) else mix_format(fmt)
+    session_id = str(session.id)
+    stamp = session_id[:15]
+    title = str(getattr(session, "title", "") or "").strip()
+    clock = f" {stamp[11:13]}:{stamp[13:15]}"
+    if title.endswith(clock):
+        title = title[: -len(clock)].rstrip()
+    title = title.replace(": ", " - ")
+    title = "".join(" " if ch in _UNSAFE or ord(ch) < 32 else ch for ch in title)
+    title = " ".join(title.split()).strip(" .-")
+    if len(title) > EXPORT_TITLE_MAX:
+        cut = title[:EXPORT_TITLE_MAX]
+        title = (cut.rsplit(" ", 1)[0] if " " in cut else cut).rstrip(" .-")
+    if not title:
+        return export_filename(session_id, resolved)
+    # Two sessions with one title in one minute (the halves of a live split,
+    # D26) are told apart by the id's collision suffix; the name has to be too,
+    # or the second export finds the first one's file and reads it as its own.
+    suffix = ""
+    captured_title = (getattr(session, "enrichment", None) or {}).get(
+        "original_title"
+    ) or getattr(session, "title", "")
+    head, _, tail = session_id.rpartition("-")
+    if tail.isdigit() and head.endswith("-" + slugify(str(captured_title))):
+        suffix = f" ({tail})"
+    return f"{stamp} {title}{suffix}.{resolved.extension}"
+
+
 # --------------------------------------------------------------------------
 # The ledger: what the upload folder has already carried
 # --------------------------------------------------------------------------
@@ -303,6 +365,26 @@ def forget_export(export_dir: Path, session_id: str) -> bool:
         return False
     entry.unlink()
     return True
+
+
+def ledger_owner(export_dir: Path, filename: str) -> str | None:
+    """Which session the ledger says a file in the folder was written for.
+
+    ``None`` for a file no marker names -- one copied in before the ledger
+    existed, or by hand. Needed since export names carry the title rather than
+    the session id: two sessions can now want the same name.
+    """
+    directory = ledger_dir(export_dir)
+    if not directory.is_dir():
+        return None
+    for entry in directory.iterdir():
+        try:
+            _stamp, _, name = entry.read_text(encoding="utf-8").strip().partition("\t")
+        except OSError:
+            continue
+        if name == filename:
+            return entry.name
+    return None
 
 
 def exported_ids(export_dir: Path) -> list[str]:

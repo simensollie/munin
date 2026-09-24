@@ -22,6 +22,7 @@ import pytest
 
 from munin import config as config_module
 from munin import mixdown
+from munin.mixdown import export_name
 from munin.capture.base import segment_filenames
 from munin.spool import Session, Spool
 from munin.worker import Worker
@@ -105,11 +106,12 @@ def test_an_enabled_export_mixes_and_copies_under_the_session_name(
 
     copy = Worker(config).export(session)
 
-    assert copy == destination / f"{session.id}.opus"
+    assert copy == destination / export_name(session)
     assert copy.exists() and copy.stat().st_size > 0
-    # Named after the session, because the importer stamps its own date at
-    # upload time and the meeting's own date exists nowhere else (spec 10).
-    assert session.id in copy.name
+    # Stamped with the meeting's own time, because the importer stamps its own
+    # date at upload and the meeting's exists nowhere else (spec 10), then the
+    # title, because the importer keeps the filename as the title for good.
+    assert copy.name == "2026-09-14T1325 Weekly quality sync.opus"
     assert mixdown.mixed_path(session).exists()
 
 
@@ -235,7 +237,7 @@ def test_a_failed_export_is_a_logged_line_not_an_exception(
         assert Worker(config).export(session) is None
 
     assert "export failed" in caplog.text
-    assert not (destination / f"{session.id}.opus").exists()
+    assert not (destination / export_name(session)).exists()
 
 
 # -- the sweep --------------------------------------------------------------
@@ -258,7 +260,7 @@ def test_a_sweep_exports_everything_the_folder_is_missing(
     Worker(config).drain()
 
     exported = sorted(path.name for path in destination.iterdir() if path.is_file())
-    assert exported == sorted(f"{session.id}.opus" for session in sessions)
+    assert exported == sorted(export_name(session) for session in sessions)
 
 
 def test_a_sweep_still_exports_a_session_already_queued_as_pending(
@@ -284,7 +286,7 @@ def test_a_sweep_still_exports_a_session_already_queued_as_pending(
     assert reloaded is not None and reloaded.state == "pending"
     Worker(_enabled(munin_home, destination)).drain()
 
-    assert (destination / f"{session.id}.opus").exists()
+    assert (destination / export_name(session)).exists()
 
 
 # -- exported once, ever ----------------------------------------------------
@@ -307,7 +309,7 @@ def test_a_file_deleted_after_upload_is_not_put_back(
     worker = Worker(config)
 
     worker.drain()
-    copy = destination / f"{session.id}.opus"
+    copy = destination / export_name(session)
     assert copy.exists()
     assert mixdown.is_exported(destination, session.id)
 
@@ -336,7 +338,7 @@ def test_a_file_moved_out_of_the_folder_is_not_put_back(
     worker = Worker(config)
 
     worker.drain()
-    copy = destination / f"{session.id}.opus"
+    copy = destination / export_name(session)
     copy.rename(archive / copy.name)
 
     worker.drain()
@@ -359,7 +361,7 @@ def test_a_folder_filled_before_the_ledger_existed_is_backfilled(
     spool = Spool(config)
     session = _captured_session(spool, two_track)
     destination.mkdir(parents=True, exist_ok=True)
-    copy = destination / f"{session.id}.opus"
+    copy = destination / export_name(session)
     copy.write_bytes(b"exported before the ledger existed")
 
     Worker(config).drain()
@@ -413,11 +415,11 @@ def test_the_ledger_is_not_per_format(
     spool = Spool(_enabled(munin_home, destination))
     session = _captured_session(spool, two_track)
     Worker(_enabled(munin_home, destination)).drain()
-    (destination / f"{session.id}.opus").unlink()
+    (destination / export_name(session)).unlink()
 
     Worker(_enabled(munin_home, destination, fmt="mp3")).drain()
 
-    assert not (destination / f"{session.id}.mp3").exists()
+    assert not (destination / export_name(session, "mp3")).exists()
 
 
 def test_the_marker_says_when_and_which_file(
@@ -439,7 +441,7 @@ def test_the_marker_says_when_and_which_file(
     body = mixdown.ledger_entry(destination, session.id).read_text(encoding="utf-8")
     stamp, _, filename = body.strip().partition("\t")
     assert datetime.fromisoformat(stamp).tzinfo is not None
-    assert filename == f"{session.id}.opus"
+    assert filename == export_name(session)
 
 
 def test_the_ledger_stays_out_of_the_session_record(

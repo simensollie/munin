@@ -86,7 +86,8 @@ class FakeSession:
     stopped_at: datetime | None = None
     duration_seconds: float | None = None
     app: dict | None = None
-    calendar_event_id: None = None
+    calendar_event_id: str | None = None
+    enrichment: dict | None = None
     segments: list[FakeSegment] = field(default_factory=list)
     checksums: dict[str, str] = field(default_factory=dict)
     pending_reason: str | None = None
@@ -119,7 +120,8 @@ class FakeSession:
             "stopped_at": _iso(self.stopped_at),
             "duration_seconds": self.duration_seconds,
             "app": self.app,
-            "calendar_event_id": None,
+            "calendar_event_id": self.calendar_event_id,
+            "enrichment": self.enrichment,
             "segments": [
                 {
                     "index": seg.index,
@@ -201,7 +203,8 @@ class FakeSpool:
 
     # --- creation ----------------------------------------------------
     def create(self, *, title: str | None, source: str, app: dict | None = None,
-               now: datetime | None = None) -> FakeSession:
+               now: datetime | None = None, calendar_event_id: str | None = None,
+               enrichment: dict | None = None) -> FakeSession:
         created = now or self.clock()
         slug = (title or "adhoc").lower().replace(" ", "-")
         sid = f"{created:%Y-%m-%dT%H%M}-{slug}"
@@ -222,6 +225,8 @@ class FakeSpool:
             created_at=created,
             started_at=created,
             clock=self.clock,
+            calendar_event_id=calendar_event_id,
+            enrichment=enrichment,
         )
         session.history.append(
             {"at": _iso(created), "from": None, "to": "recording", "by": "munin-rec"}

@@ -49,7 +49,7 @@ def test_the_parser_covers_every_command_in_the_contract() -> None:
     assert actions, "there must be a subcommand slot"
     assert set(actions[0].choices) == {
         "start", "stop", "split", "toggle", "status", "list", "mix", "event",
-        "doctor", "setup", "daemon", "worker",
+        "doctor", "setup", "daemon", "worker", "m365",
     }
 
 

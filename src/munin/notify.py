@@ -83,11 +83,24 @@ def replace_id_for(session_id: str | None) -> str | None:
     return str(zlib.crc32(session_id.encode("utf-8")) & 0x7FFFFFFF)
 
 
-def detected(app_label: str, when: str, *, session_id: str | None = None) -> Notification:
-    """Call detected. Primary action: ``munin start --from-detection``."""
+def detected(
+    app_label: str,
+    when: str,
+    *,
+    session_id: str | None = None,
+    subject: str | None = None,
+) -> Notification:
+    """Call detected. Primary action: ``munin start --from-detection``.
+
+    ``subject`` is the overlapping calendar event's (spec 6.3, 7.6), so the
+    prompt says which meeting it would record. Only the calendar supplies it.
+    """
+    body = f"{app_label} call, {when}. Click to record."
+    if subject:
+        body = f"{subject}\n{body}"
     return Notification(
         title="Meeting detected",
-        body=f"{app_label} call, {when}. Click to record.",
+        body=body,
         action=("munin", "start", "--from-detection"),
         urgency="normal",
         timeout_ms=30000,

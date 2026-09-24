@@ -36,7 +36,7 @@ from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Sequence
 
-from munin import notify
+from munin import m365, notify
 from munin.capture.base import (
     SYSTEM_OUTPUT_HANDLE,
     CaptureError,
@@ -52,7 +52,7 @@ from munin.ipc import AlreadyRunning, IpcError, Server, socket_path
 from munin.notify import Notification
 from munin.spool import StateError
 
-__all__ = ["Daemon", "RuntimeState", "main", "meeting_subject"]
+__all__ = ["Daemon", "RuntimeState", "main"]
 
 log = logging.getLogger("munin.daemon")
 
@@ -86,79 +86,6 @@ RUNTIME_STATES: tuple[str, ...] = (
     "done",
     "failed",
 )
-
-
-#: Meeting-app navigation surfaces, as they appear in the leading field of a
-#: window title. The field says where the user is in the application, never what
-#: the call is about, so it is dropped rather than used as a title. Bokmål
-#: alongside English because Teams follows the system language. A surface that
-#: is not listed costs a slightly uglier title, never a wrong one.
-TITLE_SURFACES = frozenset(
-    {
-        "chat", "calendar", "teams", "activity", "calls", "files", "apps",
-        "samtale", "kalender", "team", "aktivitet", "anrop", "filer", "apper",
-    }
-)
-
-
-def meeting_subject(window_title: str | None, app_label: str | None = None) -> str | None:
-    """What a window title says a call is about, or ``None`` if it says nothing.
-
-    Teams names its windows ``[(n) ]<surface> | <context> | <app>``, and only
-    the context field carries anything worth calling a meeting: the invite
-    subject for a calendar meeting, the other participants for a call placed
-    from a chat. Both beat a clock, which is all the fallback has.
-
-    Measured against the 14 detected sessions on the reference machine: 13 were
-    chat calls, which have no subject in Teams at all and yield participants,
-    and one was a calendar meeting, which yielded its subject. So this names a
-    session after *who* far more often than after *what* -- a real improvement
-    on ``Microsoft Teams 14:29``, and not a substitute for the calendar (spec
-    section 7.6), which is the only source that knows the subject every time.
-
-    Returns ``None`` when nothing but the application name is left, so the
-    caller keeps its own fallback rather than naming a session "Chat".
-    """
-    text = (window_title or "").strip()
-    if not text:
-        return None
-
-    # Teams prefixes an unread count: "(2) Calendar | ...". It is a notification
-    # badge that changes while the same window stays open, so it can never be
-    # part of a name.
-    while text.startswith("("):
-        close = text.find(")")
-        if close == -1 or not text[1:close].strip().isdigit():
-            break
-        text = text[close + 1 :].strip()
-
-    fields = [field.strip() for field in text.split("|")]
-    fields = [field for field in fields if field]
-    if not fields:
-        return None
-
-    # Trailing application name, which a browser extends with its own ("... |
-    # Microsoft Teams - Google Chrome"), hence a substring test rather than an
-    # equality one. Exactly one field, from the end: a subject is allowed to
-    # mention the product ("Beacon 365 rollout") and must survive that.
-    label = (app_label or "").strip().casefold()
-    if label and label in fields[-1].casefold():
-        fields.pop()
-
-    if fields and fields[0].casefold() in TITLE_SURFACES:
-        fields.pop(0)
-    if not fields:
-        return None
-
-    subject = " ".join(fields)
-    # Teams abbreviates a group chat's participant list as "A, B, +2". The count
-    # is real information, but it slugs to a trailing "-2", which is exactly what
-    # a colliding directory appends -- so it reads as a second recording of the
-    # same meeting. The names are the useful half; drop the count.
-    head, sep, tail = subject.rpartition(",")
-    if sep and tail.strip().startswith("+"):
-        subject = head.strip()
-    return subject or None
 
 
 def _now() -> datetime:
@@ -830,9 +757,12 @@ class Daemon:
         self._write_state()
         if first_sighting:
             # D4: suggest, never auto-record.
+            event = self._calendar_event(self.clock())
             self.notifier(
                 notify.detected(
-                    detected["label"], self.clock().strftime("%H:%M")
+                    detected["label"],
+                    self.clock().strftime("%H:%M"),
+                    subject=event.subject if event is not None else None,
                 )
             )
         log.info("call detected pid=%s app=%s", pid, detected["label"])
@@ -1377,12 +1307,17 @@ class Daemon:
         adopted: bool = False,
     ) -> Any:
         detected = self._detected if (from_detection or adopted) else None
-        if title is None and detected is not None:
-            # What the application says the call is, before what the clock says.
-            # The label plus the clock is the same string for every meeting of
-            # the day and tells the user nothing they cannot see from the
-            # directory name, which already carries the time.
-            title = meeting_subject(detected.get("window_title"), detected.get("label"))
+        event = self._calendar_event(now) if title is None else None
+        enrichment = None
+        if event is not None:
+            # The invite's subject is the one name that is right every time; the
+            # label plus the clock below is what an ad-hoc call is left with.
+            title = event.subject
+            enrichment = {
+                "title_from": "calendar",
+                "original_title": None,
+                "decided_at": _iso(now),
+            }
         if title is None and detected is not None:
             title = f"{detected['label']} {now.strftime('%H:%M')}"
         if title is None:
@@ -1404,10 +1339,31 @@ class Daemon:
             source="detected" if from_detection else "adhoc",
             app=app,
             now=now,
+            calendar_event_id=event.id if event is not None else None,
+            enrichment=enrichment,
         )
         if getattr(session, "state", None) != "recording":
             self._transition(session, "recording")
         return session
+
+    def _calendar_event(self, now: datetime) -> Any:
+        """The cached calendar event overlapping ``now``, or ``None``.
+
+        A local file read, never a network call: munin-work keeps the copy
+        fresh, and this loop must not wait on Microsoft (spec 7.6). A copy the
+        worker has not refreshed for a while reads as empty, so a stale slot
+        never names a meeting.
+        """
+        settings = self.config.m365
+        if not settings.enabled:
+            return None
+        max_age = timedelta(seconds=max(900, 3 * settings.calendar_refresh_seconds))
+        try:
+            events = m365.read_calendar(self.config.home, max_age=max_age, now=now)
+            return m365.match_event(events, now)
+        except Exception as exc:  # noqa: BLE001 - enrichment must never stop a start
+            log.warning("calendar lookup failed: %s", exc)
+            return None
 
     def _reopen(self, session: Any) -> None:
         """D15: a resume is the one state that moves backwards, and it is ours."""

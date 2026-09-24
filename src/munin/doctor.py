@@ -766,6 +766,49 @@ def check_platform_support(env: DoctorEnv) -> list[CheckResult]:
 # The table
 # ---------------------------------------------------------------------------
 
+def check_m365(env: DoctorEnv) -> CheckResult:
+    """Microsoft 365 enrichment (spec 7.6): signed in, calendar copy fresh.
+
+    A warning at worst, never a failure: without it sessions are named from the
+    clock, which is how every session was named before M9.
+    """
+    from datetime import datetime, timedelta
+
+    from munin import m365
+
+    settings = env.config.m365
+    if not settings.enabled:
+        return CheckResult("m365", "ok", "[m365] disabled; sessions are named from the clock")
+    if env.which("secret-tool") is None:
+        return CheckResult(
+            "m365", "warn", "secret-tool not found; install libsecret to keep the sign-in"
+        )
+    try:
+        graph = m365.Graph.from_settings(settings)
+        signed_in = graph.signed_in()
+    except Exception as exc:  # noqa: BLE001 - a check never raises
+        return CheckResult("m365", "warn", f"keyring unavailable: {exc}")
+    if not signed_in:
+        return CheckResult("m365", "warn", "not signed in; run `munin m365 login`")
+    path = m365.calendar_path(env.data_home)
+    events = m365.read_calendar(env.data_home, max_age=timedelta(days=3650))
+    try:
+        age = datetime.now().timestamp() - path.stat().st_mtime
+    except OSError:
+        return CheckResult(
+            "m365", "warn", "signed in; no calendar copy yet (munin-work writes it)"
+        )
+    limit = max(900, 3 * settings.calendar_refresh_seconds)
+    detail = f"signed in; calendar copy {int(age // 60)} min old, {len(events)} events"
+    if age > limit:
+        return CheckResult(
+            "m365",
+            "warn",
+            detail + " -- stale, so sessions fall back to the clock; see munin.log",
+        )
+    return CheckResult("m365", "ok", detail)
+
+
 CHECKS: tuple[Check, ...] = (
     Check("python", "all", check_python),
     Check("ffmpeg", "all", check_ffmpeg),
@@ -789,6 +832,7 @@ CHECKS: tuple[Check, ...] = (
     Check("orphan sessions", "all", check_orphans),
     Check("transcription", "all", check_backend),
     Check("export", "all", check_export),
+    Check("m365", "all", check_m365),
     Check("platform support", "all", check_platform_support),
 )
 

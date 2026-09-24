@@ -3,6 +3,7 @@
 **Status:** Frozen for the PoC build
 **Date:** 2026-09-14
 **Amended:** 2026-09-16 — D24 removed the second-brain copy. **Breaking**, see below.
+**Amended:** 2026-09-24 — M365 naming (calendar, direct calls). Additive to `session.json`; **breaking** for export filenames, see below.
 **Implements:** [`2026-09-14-meeting-recorder-design.md`](2026-09-14-meeting-recorder-design.md) (the spec)
 **Sequences against:** [`../plans/2026-09-14-implementation-plan.md`](../plans/2026-09-14-implementation-plan.md)
 
@@ -27,38 +28,74 @@ The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
 
-### Amendment 2026-09-24 (window subject as title): additive
+### Amendment 2026-09-24 (M365 naming): additive, export names breaking
 
-A detected session is named from the meeting application's window title before
-it falls back to the app label plus the clock. §3's `title` rule gains one step;
-nothing else changes, and `munin start "..."` still wins over both.
+The naming half of M9 (spec §7.6), built ahead of M4 because the export name is
+what Plaud keeps for good (spec §10). Agenda biasing, the attendee closed set and
+the series-level opt-out stay with M9.
 
-The clock fallback produced `Microsoft Teams 14:29`, which is the same sentence
-for every meeting of the day and repeats a time the directory name already
-carries. Teams shapes its window title as `[(n) ]<surface> | <context> | <app>`,
-and the context field is the only part that ever names anything:
-`munin.daemon.meeting_subject()` is the single implementation, pure and tested
-without hardware.
+| Surface | Before | After |
+|---|---|---|
+| `[m365]` config | absent | `enabled` (false), `tenant_id`, `client_id`, `calendar_refresh_seconds` (300), `direct_calls` (true), `export_hold_seconds` (600) |
+| `munin m365` | absent | `login` (OAuth device code), `status`, `logout`, `refresh` |
+| `~/munin/m365/calendar.json` | absent | Worker-written copy of ±12 h of calendar, mode 0600 in a 0700 dir. Subject, times, event id, online flag, attendee *count*. |
+| `session.json` `calendar_event_id` | always `null` | the matched event's id, or `null` |
+| `session.json` `enrichment` | absent | `null`, or `{title_from: "calendar"\|"direct-call"\|null, original_title, decided_at, reason?}` |
+| §3 `title` rule | user, else label + clock | user, else **calendar subject**, else label + clock. May be changed **once** after capture by the worker, recorded in `enrichment` |
+| Export filename | `<session id>.<ext>` | `<YYYY-MM-DDTHHMM> <title>.<ext>` (`mixdown.export_name`); a trailing clock is dropped, `: ` becomes ` - `, unsafe characters go, a collision suffix becomes ` (n)` |
+| `munin doctor` | 25 checks | 26: `m365` (warn at worst) |
 
-Measured by replaying it over the 15 sessions on the reference machine: 14 got a
-name. **Thirteen of those are participants, not subjects** — they were calls
-placed from a chat, which have no subject in Teams at all — and one was a
-calendar meeting, which yielded its invite subject. So this names a session after
-*who* far more often than after *what*. It is an improvement on a clock and it is
-**not** a substitute for M365 enrichment (spec §7.6), which remains the only
-source that knows the subject every time.
+**Who does what.** munin-rec reads `calendar.json` when it creates a session and
+never touches the network (one thread, §daemon). munin-work refreshes the copy,
+makes a late calendar match for a session created while the copy was stale, and
+for a detected Teams call with no event looks up Teams' *call ended* system
+message: exactly one other participant names the session, anything else keeps
+the clock title. A copy older than `max(900 s, 3 × refresh)` reads as empty.
 
-Additive: `meeting_subject()` returns `None` for a title holding nothing but the
-application, so a session that would have been named from the clock before still
-is. No `session.json` written before this amendment changes meaning, and no
-directory is renamed.
+**Export is held** for a detected Teams call with no event while its name can
+still change: until decided, or `export_hold_seconds` after capture stopped.
+Never held when not signed in. The ledger stays keyed by session id, so a title
+decided after export does not export twice.
 
-**Compliance (spec §12): this is a new data flow, not only a naming change.**
-The session id is the Plaud export filename (§10), so a colleague's name now
-leaves the machine with the upload where `microsoft-teams-14-29` disclosed
-nothing. It is the user's own opt-in `[export]` folder and a manual drag, but it
-is a disclosure to a third party under their retention and it goes with D25.
-Retention defaults remain open.
+**What did not change.** The session id and directory are fixed at creation and
+never renamed; the name enrichment decides lives in `title` only. `history[]`
+gets no row (a title is not a state). Sessions created before this amendment are
+not revisited unless their call ended less than `export_hold_seconds` ago.
+
+**Tokens.** Delegated scopes `offline_access User.Read Calendars.Read`, plus
+`Chat.Read` only while `direct_calls` is on. Kept apart because a tenant can
+allow the calendar on user consent and reserve Chat.Read for an admin (observed
+on the reference tenant); asking for both at once blocks the calendar too.
+The refresh token is stored with `secret-tool` (libsecret) under
+`service=munin-m365 account=<tenant>/<client>`; there is no plaintext fallback.
+Access tokens live in process memory only. Standard library only; no dependency
+was added.
+
+**Compliance (spec §12).** New data flow: meeting subjects (which name
+customers) are copied into `calendar.json`, `session.json` and the export name
+that goes to Plaud; a direct call's other party is named likewise. Chat.Read
+grants read access to message content, although only *call ended* events are
+used and nothing else is kept. Retention of `calendar.json` follows the window
+(it is overwritten every refresh).
+
+**Not verified on this machine.** That a one-to-one Teams call produces a
+`callEndedEventMessageDetail` in the chat, with both participants in
+`callParticipants`, and how long after the call it appears. The code decides
+"not a one-to-one call" rather than guessing when the evidence is ambiguous.
+
+### Amendment 2026-09-24 (window subject as title): withdrawn
+
+Briefly, a detected session was named from the meeting application's window
+title before the app-label-plus-clock fallback. Withdrawn the same day: the
+Teams main window names whichever chat or view is focused, not the call.
+Replayed over the 15 sessions on the reference machine, one colleague's chat
+named four different meetings, and a five-person calendar meeting was named
+after one attendee. A wrong name is worse than a clock, and it also sent a
+colleague's name to Plaud in the export filename for no benefit.
+
+§3's `title` rule is back to what it was. The subject comes from M365
+enrichment (spec §7.6) or not at all. Sessions created while the amendment was
+live keep their titles; no directory is renamed.
 
 ### Amendment 2026-09-21 (exported once): additive
 
@@ -345,7 +382,7 @@ Field rules:
 |---|---|
 | `schema_version` | `1`. A reader that sees a higher number refuses the session rather than guessing. |
 | `state` | §4. |
-| `title` | User-supplied, else the meeting-app window subject (amendment 2026-09-24), else the detected app label plus time, else `Meeting <HH:MM>`. Never `null`. |
+| `title` | User-supplied, else the overlapping calendar event's subject (amendment 2026-09-24, M365 naming), else the detected app label plus time, else `Meeting <HH:MM>`. Never `null`. The worker may change it once after capture, recording that in `enrichment`. |
 | `source` | `"adhoc"` (user started it) or `"detected"` (started from a detection prompt or event). |
 | `platform` | `sys.platform` value: `"linux"`. §16.5 — a transcript stays reproducible on a machine that could not have recorded it. |
 | `capture_method` | `Capturer.method` (§5). Frozen string per implementation. |

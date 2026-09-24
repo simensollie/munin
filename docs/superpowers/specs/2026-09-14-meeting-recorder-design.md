@@ -536,6 +536,17 @@ Sessions match events by time overlap. **The attendance report is an upgrade, no
 a dependency:** Graph gates online-meeting artifacts behind tenant-admin consent
 rather than user consent, so assume the invite list is what you get and request
 the report separately. This answers open question 4.
+
+**Built so far (2026-09-24): naming only.** See contracts amendment 2026-09-24
+(M365 naming). The recorder names a session from a local copy of the calendar
+that munin-work keeps fresh, so the recorder never waits on the network. A call
+placed from a chat has no event; for those the worker reads the *call ended*
+message Teams posts in that chat, and names the session after the other person
+only when there is exactly one. A group call keeps `Microsoft Teams HH:MM`. The
+window title is not a source: the Teams main window names the focused chat, not
+the call. Agenda biasing, the attendee closed set and the series opt-out remain
+M9. Whether a one-to-one call's *call ended* message reliably names both
+participants is **not yet verified** on real hardware.
 ## 8. Transcription backends
 
 Three backends satisfy one interface, ordered into a fallback chain in
@@ -871,8 +882,14 @@ documentation is explicit that a summary template does not rename a recording an
 that renaming is manual, with no bulk rename.
 
 The consequence is that **the name Munin sends is the name the meeting keeps**.
-That is the whole reason the window subject now feeds the session title
-(contracts amendment 2026-09-24): nothing downstream will improve on it.
+Nothing downstream will improve on it, which is what makes the calendar subject
+(§7.6) worth having at capture time. Exports are therefore named
+`<YYYY-MM-DDTHHMM> <title>.opus` rather than after the session id, and a
+detected call whose name is still being decided is held back for a few minutes
+(contracts amendment 2026-09-24, M365 naming). A window-title subject was tried the same
+day and withdrawn (contracts amendment 2026-09-24): the Teams main window names
+the focused chat, not the call. A file still waiting in the folder can be
+renamed by hand; the ledger is keyed by session id, so it is not re-exported.
 
 **Exported once, ever.** The folder is a queue: what is in it still needs
 uploading, and uploading a meeting ends with deleting or moving the file. The

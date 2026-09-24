@@ -165,6 +165,27 @@ glyph   = "\\U000f0ec2"
 enabled   = false
 directory = "~/plaud-upload"
 format    = "opus"
+
+[m365]
+# Microsoft 365 enrichment (spec 7.6): name a session after the calendar event
+# it overlaps, or after the other person on a direct Teams call. Enrichment
+# only -- it never starts or stops a recording (D4). Off by default: it reads
+# your calendar and your Teams chats' call events with a delegated token kept in
+# the desktop keyring, and meeting subjects then name sessions and exports.
+# `tenant_id` and `client_id` are an Entra app registration that is a public
+# client with "Allow public client flows" on. Sign in with `munin m365 login`.
+enabled   = false
+tenant_id = ""
+client_id = ""
+# How often munin-work refreshes the local copy of today's calendar.
+calendar_refresh_seconds = 300
+# Look up the other party of a direct call from Teams' "call ended" message.
+# Adds the Chat.Read scope, which some tenants reserve for admin approval; sign
+# in again (`munin m365 login`) after turning this on.
+direct_calls = true
+# How long a detected call with no calendar event is held back from [export]
+# while the worker waits for that message. Seconds after capture stops.
+export_hold_seconds = 600
 """
 
 
@@ -225,6 +246,16 @@ class ExportConfig:
 
 
 @dataclass(frozen=True)
+class M365Config:
+    enabled: bool = False
+    tenant_id: str = ""
+    client_id: str = ""
+    calendar_refresh_seconds: int = 300
+    direct_calls: bool = True
+    export_hold_seconds: int = 600
+
+
+@dataclass(frozen=True)
 class Config:
     """The whole file, defaults applied."""
 
@@ -236,6 +267,7 @@ class Config:
     idle: IdleConfig = field(default_factory=IdleConfig)
     notifications: NotificationConfig = field(default_factory=NotificationConfig)
     export: ExportConfig = field(default_factory=ExportConfig)
+    m365: M365Config = field(default_factory=M365Config)
     unknown_keys: tuple[str, ...] = ()
     source_path: Path | None = None
 
@@ -294,6 +326,14 @@ _SCALAR_FIELDS: dict[str, dict[str, type]] = {
     "idle": {"inhibit": bool, "method": str},
     "notifications": {"enabled": bool, "glyph": str},
     "export": {"enabled": bool, "directory": str, "format": str},
+    "m365": {
+        "enabled": bool,
+        "tenant_id": str,
+        "client_id": str,
+        "calendar_refresh_seconds": int,
+        "direct_calls": bool,
+        "export_hold_seconds": int,
+    },
 }
 
 _DETECTION_SOURCES = ("plugin", "daemon", "off")
@@ -445,6 +485,7 @@ def load(path: Path | None = None) -> Config:
     idle_known = _section(raw, "idle", unknown)
     notifications_known = _section(raw, "notifications", unknown)
     export_known = _section(raw, "export", unknown)
+    m365_known = _section(raw, "m365", unknown)
 
     for name in raw:
         if name not in {
@@ -456,6 +497,7 @@ def load(path: Path | None = None) -> Config:
             "idle",
             "notifications",
             "export",
+            "m365",
         }:
             unknown.append(name)
 
@@ -499,6 +541,14 @@ def load(path: Path | None = None) -> Config:
     if export.enabled and not export.directory.strip():
         raise ConfigError("[export] directory must not be empty when enabled")
 
+    m365 = M365Config(**m365_known)
+    if m365.enabled and not (m365.tenant_id.strip() and m365.client_id.strip()):
+        raise ConfigError("[m365] tenant_id and client_id must be set when enabled")
+    if m365.calendar_refresh_seconds < 60:
+        raise ConfigError("[m365] calendar_refresh_seconds must be at least 60")
+    if m365.export_hold_seconds < 0:
+        raise ConfigError("[m365] export_hold_seconds must not be negative")
+
     return Config(
         home=home,
         paths=PathsConfig(**paths_known),
@@ -510,6 +560,7 @@ def load(path: Path | None = None) -> Config:
         idle=IdleConfig(**idle_known),
         notifications=NotificationConfig(**notifications_known),
         export=export,
+        m365=m365,
         unknown_keys=tuple(unknown),
         source_path=source_path,
     )

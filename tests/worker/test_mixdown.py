@@ -30,6 +30,7 @@ from munin.mixdown import (
     exported_ids,
     existing_mixes,
     export_filename,
+    export_name,
     forget_export,
     is_exported,
     ledger_entry,
@@ -342,7 +343,7 @@ def test_mix_copies_to_an_upload_folder_under_the_session_name(
     # with the session that produced it. An importer stamps an upload with the
     # upload time and renames it to its own generated title only once a summary
     # finishes, so the filename is the only carrier of the meeting's own clock.
-    assert (target / f"{session.id}.opus").exists()
+    assert (target / export_name(session)).exists()
     assert session.id.startswith("2026-09-14T1325")
     # The original stays in the session directory; the copy is for the browser.
     assert mixed_path(session).exists()
@@ -362,7 +363,7 @@ def test_mix_falls_back_to_the_configured_export_folder(
 
     assert cli.main(["mix", session.id]) == cli.EXIT_OK
 
-    assert (target / f"{session.id}.opus").exists()
+    assert (target / export_name(session)).exists()
 
 
 def test_mix_without_an_enabled_export_copies_nowhere(
@@ -388,10 +389,10 @@ def test_mix_format_follows_the_configured_export_format(
 
     assert cli.main(["mix", session.id]) == cli.EXIT_OK
 
-    assert (target / f"{session.id}.mp3").exists()
+    assert (target / export_name(session, "mp3")).exists()
     # The flag still wins over the config.
     assert cli.main(["mix", session.id, "--format", "opus"]) == cli.EXIT_OK
-    assert (target / f"{session.id}.opus").exists()
+    assert (target / export_name(session)).exists()
 
 
 def test_mix_refuses_an_unknown_session(spool: Spool, capsys) -> None:
@@ -518,15 +519,15 @@ def test_mix_all_skips_what_the_folder_already_carried(
     target = tmp_path / "plaud-upload"
     old = _captured_session(spool, two_track, title="Supplier review")
     assert cli.main(["mix", old.id, "--to", str(target)]) == cli.EXIT_OK
-    (target / f"{old.id}.opus").unlink()
+    (target / export_name(old)).unlink()
     fresh = _captured_session(spool, two_track, title="Weekly quality sync")
     capsys.readouterr()
 
     assert cli.main(["mix", "--all", "--to", str(target)]) == cli.EXIT_OK
 
     out = capsys.readouterr().out
-    assert (target / f"{fresh.id}.opus").exists()
-    assert not (target / f"{old.id}.opus").exists()
+    assert (target / export_name(fresh)).exists()
+    assert not (target / export_name(old)).exists()
     assert "1 already exported" in out
 
 
@@ -540,11 +541,11 @@ def test_naming_a_session_puts_back_a_file_deleted_by_accident(
     target = tmp_path / "plaud-upload"
     session = _captured_session(spool, two_track, title="Weekly quality sync")
     assert cli.main(["mix", session.id, "--to", str(target)]) == cli.EXIT_OK
-    (target / f"{session.id}.opus").unlink()
+    (target / export_name(session)).unlink()
 
     assert cli.main(["mix", session.id, "--to", str(target)]) == cli.EXIT_OK
 
-    assert (target / f"{session.id}.opus").exists()
+    assert (target / export_name(session)).exists()
 
 
 def test_mix_all_force_refills_the_whole_folder(
@@ -553,8 +554,62 @@ def test_mix_all_force_refills_the_whole_folder(
     target = tmp_path / "plaud-upload"
     session = _captured_session(spool, two_track, title="Weekly quality sync")
     assert cli.main(["mix", "--all", "--to", str(target)]) == cli.EXIT_OK
-    (target / f"{session.id}.opus").unlink()
+    (target / export_name(session)).unlink()
 
     assert cli.main(["mix", "--all", "--to", str(target), "--force"]) == cli.EXIT_OK
 
-    assert (target / f"{session.id}.opus").exists()
+    assert (target / export_name(session)).exists()
+
+
+# -- export_name: what the importer will call the meeting for good ---------------
+
+
+class _Named:
+    def __init__(self, session_id: str, title: str, enrichment: dict | None = None) -> None:
+        self.id = session_id
+        self.title = title
+        self.enrichment = enrichment
+
+
+@pytest.mark.parametrize(
+    ("session_id", "title", "expected"),
+    [
+        # The stamp first, then the title as a person wrote it.
+        ("2026-09-23T0901-qms-risk-review", "QMS risk review", "2026-09-23T0901 QMS risk review.opus"),
+        # A clock fallback loses the clock the stamp already carries.
+        ("2026-09-24T0906-microsoft-teams-09-06", "Microsoft Teams 09:06", "2026-09-24T0906 Microsoft Teams.opus"),
+        # A ": " separator reads as a dash; other refused characters go.
+        ("2026-09-24T0906-flutter", "Flutter sharing: mobile app", "2026-09-24T0906 Flutter sharing - mobile app.opus"),
+        ("2026-09-24T0906-a-b", "Q3/Q4 plan? <draft>", "2026-09-24T0906 Q3 Q4 plan draft.opus"),
+        # Nothing left of the title: the id, as before.
+        ("2026-09-24T0906-adhoc", "???", "2026-09-24T0906-adhoc.opus"),
+    ],
+)
+def test_export_name_is_stamp_and_title(session_id: str, title: str, expected: str) -> None:
+    assert export_name(_Named(session_id, title)) == expected
+
+
+def test_export_name_tells_same_minute_twins_apart() -> None:
+    """The halves of a live split share a title and a minute (D26)."""
+    first = _Named("2026-09-14T1325-weekly-quality-sync", "Weekly quality sync")
+    second = _Named("2026-09-14T1325-weekly-quality-sync-2", "Weekly quality sync")
+    assert export_name(first) == "2026-09-14T1325 Weekly quality sync.opus"
+    assert export_name(second) == "2026-09-14T1325 Weekly quality sync (2).opus"
+
+
+def test_a_title_ending_in_a_number_is_not_a_twin() -> None:
+    assert export_name(_Named("2026-09-14T1325-sprint-2", "Sprint 2")) == "2026-09-14T1325 Sprint 2.opus"
+
+
+def test_a_renamed_twin_keeps_its_suffix() -> None:
+    twin = _Named(
+        "2026-09-14T1325-microsoft-teams-13-25-2",
+        "Ola Nordmann",
+        {"title_from": "direct-call", "original_title": "Microsoft Teams 13:25"},
+    )
+    assert export_name(twin) == "2026-09-14T1325 Ola Nordmann (2).opus"
+
+
+def test_a_long_subject_is_cut_at_a_word() -> None:
+    name = export_name(_Named("2026-09-14T1325-x", "word " * 40))
+    assert len(name) < 120 and name.endswith("word.opus")

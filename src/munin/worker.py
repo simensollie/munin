@@ -28,6 +28,7 @@ from munin import mixdown
 from munin.backends import get_backend
 from munin.backends.base import BackendUnavailable
 from munin.config import Config, load as load_config
+from munin.enrich import Enricher
 from munin.pipeline import run as run_pipeline
 from munin.pipeline.render import adjust_segments, render_transcript
 from munin.spool import Segment, Session, Spool, StateError
@@ -77,9 +78,10 @@ def _compute_gaps(segments: Sequence[Segment]) -> list[tuple[float, float]]:
 class Worker:
     """Drains one spool."""
 
-    def __init__(self, config: Config) -> None:
+    def __init__(self, config: Config, *, enricher: Enricher | None = None) -> None:
         self.config = config
         self.spool = Spool(config)
+        self.enricher = enricher or Enricher(config)
 
     def recover(self) -> int:
         """Reset every ``transcribing`` session to ``pending``. Returns the count."""
@@ -135,18 +137,35 @@ class Worker:
             return None
         if session.state in mixdown.SKIP_STATES:
             return None
+        if self.enricher.holding(session):
+            # The name is still being decided (spec 7.6), and the importer keeps
+            # whatever name a file arrives with. A few minutes late is cheaper
+            # than a meeting called "Microsoft Teams" forever.
+            return None
         fmt = self.config.export.format
         export_dir = self.config.export_dir
-        destination = export_dir / mixdown.export_filename(session.id, fmt)
-        if destination.exists():
-            # Backfill: the folder is carrying the file, so it has been
-            # exported, whether or not a marker was written at the time. This is
-            # what carries a folder filled before the ledger existed across the
-            # change without re-exporting everything in it once more.
-            self._mark_exported(session, destination)
-            return None
         if mixdown.is_exported(export_dir, session.id):
             return None
+        destination = export_dir / mixdown.export_name(session, fmt)
+        legacy = export_dir / mixdown.export_filename(session.id, fmt)
+        for existing in (destination, legacy):
+            if not existing.exists():
+                continue
+            owner = mixdown.ledger_owner(export_dir, existing.name)
+            if owner in (None, session.id):
+                # Backfill: the folder is carrying the file, so it has been
+                # exported, whether or not a marker was written at the time. This
+                # is what carries a folder filled before the ledger existed across
+                # the change without re-exporting everything in it once more.
+                self._mark_exported(session, existing)
+                return None
+        if destination.exists():
+            # Another session's file under the same name: two meetings in one
+            # minute that the calendar gave one subject. Numbered, never merged.
+            stem, suffix, n = destination.stem, destination.suffix, 2
+            while destination.exists():
+                destination = destination.with_name(f"{stem} ({n}){suffix}")
+                n += 1
         try:
             destination.parent.mkdir(parents=True, exist_ok=True)
             mixed = mixdown.mixdown(session, fmt=fmt)
@@ -284,7 +303,11 @@ class Worker:
         # processed in the same sweep was one session's worth of work, and the
         # docstring promises sessions.
         touched: set[str] = set()
+        self.enricher.refresh_calendar()
         for session in list(self.spool.iter_sessions()):
+            # Named before it is exported: the export name carries the title.
+            if self.enricher.enrich(session):
+                touched.add(session.id)
             # Before the claim below, so a session captured during this sweep is
             # exported in the same sweep rather than one interval later.
             if self.export(session) is not None:
