@@ -479,6 +479,7 @@ Panel {
                             visible: root.status.last_error !== null
                             label: "Error"
                             value: String(root.status.last_error || "")
+                            wrap: true
                         }
                     }
 
@@ -596,7 +597,7 @@ Panel {
 
                     PanelSeparator { foreground: root.foreground }
 
-                    Row {
+                    Flow {
                         width: parent.width
                         spacing: Style.space(8)
 
@@ -630,7 +631,12 @@ Panel {
         switch (root.barState) {
         case "detected": return "A call is live. Munin is not recording.";
         case "recording": return "Recording, two tracks.";
-        case "ending": return "Meeting seems over. Recording stops soon.";
+        // Short because `ending` is one of the two states that also show the
+        // elapsed pill, which takes the tail of the hero line: the 40-char
+        // version elided to "MEETING SEEMS OVER. RECORDING S...". The exact
+        // deadline is the "Stops at" pair below, so the hero only has to say
+        // that there is one.
+        case "ending": return "Call seems over. Stopping soon.";
         case "captured":
         case "transcribing":
             return Model.deferred(root.status, root.nowMs)
@@ -663,14 +669,23 @@ Panel {
 
     // A label and a value on one line, the label dim. Same shape the first
     // party panels use for their key/value blocks.
+    //
+    // The value elides by default, which is right for a source or a clock --
+    // they are recognisable from their head. It is wrong for an error, where
+    // the tail is the part that says what to do, so `wrap` trades the single
+    // line for the whole string.
     component InfoPair: Item {
         id: pair
 
         property string label: ""
         property string value: ""
+        property bool wrap: false
 
         width: parent ? parent.width : 0
-        implicitHeight: Math.max(pairLabel.implicitHeight, pairValue.implicitHeight)
+        // contentHeight for the value, because a wrapping Text's implicit
+        // height is the height it would have unwrapped -- one line -- and the
+        // Item would then be too short for the error it is holding.
+        implicitHeight: Math.max(pairLabel.implicitHeight, pairValue.contentHeight)
 
         Text {
             id: pairLabel
@@ -696,7 +711,8 @@ Panel {
             color: root.foreground
             font.family: root.fontFamily
             font.pixelSize: Style.font.bodySmall
-            elide: Text.ElideRight
+            elide: pair.wrap ? Text.ElideNone : Text.ElideRight
+            wrapMode: pair.wrap ? Text.WordWrap : Text.NoWrap
         }
     }
 
