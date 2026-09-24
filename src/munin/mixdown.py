@@ -220,10 +220,14 @@ def export_filename(session_id: str, fmt: str | MixFormat = DEFAULT_FORMAT) -> s
 
     Carrying the time matters more than it looks. An uploaded file arrives at a
     third-party importer with no session record attached: the importer stamps it
-    with the moment of upload, hours or days after the meeting, and replaces the
-    filename with its own generated title only once a summary finishes -- never,
-    if that fails. Until then the filename is the only thing that still knows
-    when the meeting was, and ``mixed.opus`` is the same name for every meeting.
+    with the moment of upload, hours or days after the meeting, so the filename
+    is the only thing that still knows when the meeting was, and ``mixed.opus``
+    is the same name for every meeting.
+
+    The name is also final. An imported file keeps whatever it was uploaded as,
+    however good a summary the importer then generates from it (spec section 10,
+    corrected 2026-09-24) -- which is why the session title is worth deriving
+    properly at capture time rather than left to a clock.
 
     >>> export_filename("2026-09-17T0913-weekly-quality-sync")
     '2026-09-17T0913-weekly-quality-sync.opus'

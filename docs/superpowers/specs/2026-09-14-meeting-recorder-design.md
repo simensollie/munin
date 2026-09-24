@@ -856,11 +856,23 @@ Exported filenames carry the session directory name, so a file in the upload
 folder pairs unambiguously with the session that produced it — and carries the
 meeting's own date and time, which nothing else does. Observed on the first real
 upload (2026-09-17): the importer stamps `Date created` at the moment of upload,
-whenever you got round to it, and replaces the filename with its own generated
-title only once a summary finishes, never if that fails. Uploading the file
-under its in-session name means every meeting arrives called `mixed`. The upload
-itself is a manual drag into Plaud's web importer; munin does not automate it
-(Appendix A).
+whenever you got round to it. Uploading the file under its in-session name means
+every meeting arrives called `mixed`. The upload itself is a manual drag into
+Plaud's web importer; munin does not automate it (Appendix A).
+
+**Corrected 2026-09-24.** This section previously said the importer replaces the
+filename with its own generated title once a summary finishes. That is the
+behaviour of Plaud's *device* recordings, which start life named after their end
+time; it was generalised to import, and import does not do it. An imported file
+keeps the name it was uploaded under, summary or no summary — confirmed against
+a library holding both kinds, where device files carry generated titles and every
+Munin upload still reads `2026-09-21T1429-microsoft-teams-14-29`. Plaud's own
+documentation is explicit that a summary template does not rename a recording and
+that renaming is manual, with no bulk rename.
+
+The consequence is that **the name Munin sends is the name the meeting keeps**.
+That is the whole reason the window subject now feeds the session title
+(contracts amendment 2026-09-24): nothing downstream will improve on it.
 
 **Exported once, ever.** The folder is a queue: what is in it still needs
 uploading, and uploading a meeting ends with deleting or moving the file. The

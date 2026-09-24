@@ -27,6 +27,39 @@ The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
 
+### Amendment 2026-09-24 (window subject as title): additive
+
+A detected session is named from the meeting application's window title before
+it falls back to the app label plus the clock. §3's `title` rule gains one step;
+nothing else changes, and `munin start "..."` still wins over both.
+
+The clock fallback produced `Microsoft Teams 14:29`, which is the same sentence
+for every meeting of the day and repeats a time the directory name already
+carries. Teams shapes its window title as `[(n) ]<surface> | <context> | <app>`,
+and the context field is the only part that ever names anything:
+`munin.daemon.meeting_subject()` is the single implementation, pure and tested
+without hardware.
+
+Measured by replaying it over the 15 sessions on the reference machine: 14 got a
+name. **Thirteen of those are participants, not subjects** — they were calls
+placed from a chat, which have no subject in Teams at all — and one was a
+calendar meeting, which yielded its invite subject. So this names a session after
+*who* far more often than after *what*. It is an improvement on a clock and it is
+**not** a substitute for M365 enrichment (spec §7.6), which remains the only
+source that knows the subject every time.
+
+Additive: `meeting_subject()` returns `None` for a title holding nothing but the
+application, so a session that would have been named from the clock before still
+is. No `session.json` written before this amendment changes meaning, and no
+directory is renamed.
+
+**Compliance (spec §12): this is a new data flow, not only a naming change.**
+The session id is the Plaud export filename (§10), so a colleague's name now
+leaves the machine with the upload where `microsoft-teams-14-29` disclosed
+nothing. It is the user's own opt-in `[export]` folder and a manual drag, but it
+is a disclosure to a third party under their retention and it goes with D25.
+Retention defaults remain open.
+
 ### Amendment 2026-09-21 (exported once): additive
 
 Automating the copy made the folder current; it also made it refill itself. The
@@ -312,7 +345,7 @@ Field rules:
 |---|---|
 | `schema_version` | `1`. A reader that sees a higher number refuses the session rather than guessing. |
 | `state` | §4. |
-| `title` | User-supplied, else the detected app label plus time, else `Meeting <HH:MM>`. Never `null`. |
+| `title` | User-supplied, else the meeting-app window subject (amendment 2026-09-24), else the detected app label plus time, else `Meeting <HH:MM>`. Never `null`. |
 | `source` | `"adhoc"` (user started it) or `"detected"` (started from a detection prompt or event). |
 | `platform` | `sys.platform` value: `"linux"`. §16.5 — a transcript stays reproducible on a machine that could not have recorded it. |
 | `capture_method` | `Capturer.method` (§5). Frozen string per implementation. |

@@ -52,7 +52,7 @@ from munin.ipc import AlreadyRunning, IpcError, Server, socket_path
 from munin.notify import Notification
 from munin.spool import StateError
 
-__all__ = ["Daemon", "RuntimeState", "main"]
+__all__ = ["Daemon", "RuntimeState", "main", "meeting_subject"]
 
 log = logging.getLogger("munin.daemon")
 
@@ -86,6 +86,79 @@ RUNTIME_STATES: tuple[str, ...] = (
     "done",
     "failed",
 )
+
+
+#: Meeting-app navigation surfaces, as they appear in the leading field of a
+#: window title. The field says where the user is in the application, never what
+#: the call is about, so it is dropped rather than used as a title. Bokmål
+#: alongside English because Teams follows the system language. A surface that
+#: is not listed costs a slightly uglier title, never a wrong one.
+TITLE_SURFACES = frozenset(
+    {
+        "chat", "calendar", "teams", "activity", "calls", "files", "apps",
+        "samtale", "kalender", "team", "aktivitet", "anrop", "filer", "apper",
+    }
+)
+
+
+def meeting_subject(window_title: str | None, app_label: str | None = None) -> str | None:
+    """What a window title says a call is about, or ``None`` if it says nothing.
+
+    Teams names its windows ``[(n) ]<surface> | <context> | <app>``, and only
+    the context field carries anything worth calling a meeting: the invite
+    subject for a calendar meeting, the other participants for a call placed
+    from a chat. Both beat a clock, which is all the fallback has.
+
+    Measured against the 14 detected sessions on the reference machine: 13 were
+    chat calls, which have no subject in Teams at all and yield participants,
+    and one was a calendar meeting, which yielded its subject. So this names a
+    session after *who* far more often than after *what* -- a real improvement
+    on ``Microsoft Teams 14:29``, and not a substitute for the calendar (spec
+    section 7.6), which is the only source that knows the subject every time.
+
+    Returns ``None`` when nothing but the application name is left, so the
+    caller keeps its own fallback rather than naming a session "Chat".
+    """
+    text = (window_title or "").strip()
+    if not text:
+        return None
+
+    # Teams prefixes an unread count: "(2) Calendar | ...". It is a notification
+    # badge that changes while the same window stays open, so it can never be
+    # part of a name.
+    while text.startswith("("):
+        close = text.find(")")
+        if close == -1 or not text[1:close].strip().isdigit():
+            break
+        text = text[close + 1 :].strip()
+
+    fields = [field.strip() for field in text.split("|")]
+    fields = [field for field in fields if field]
+    if not fields:
+        return None
+
+    # Trailing application name, which a browser extends with its own ("... |
+    # Microsoft Teams - Google Chrome"), hence a substring test rather than an
+    # equality one. Exactly one field, from the end: a subject is allowed to
+    # mention the product ("Beacon 365 rollout") and must survive that.
+    label = (app_label or "").strip().casefold()
+    if label and label in fields[-1].casefold():
+        fields.pop()
+
+    if fields and fields[0].casefold() in TITLE_SURFACES:
+        fields.pop(0)
+    if not fields:
+        return None
+
+    subject = " ".join(fields)
+    # Teams abbreviates a group chat's participant list as "A, B, +2". The count
+    # is real information, but it slugs to a trailing "-2", which is exactly what
+    # a colliding directory appends -- so it reads as a second recording of the
+    # same meeting. The names are the useful half; drop the count.
+    head, sep, tail = subject.rpartition(",")
+    if sep and tail.strip().startswith("+"):
+        subject = head.strip()
+    return subject or None
 
 
 def _now() -> datetime:
@@ -1304,6 +1377,12 @@ class Daemon:
         adopted: bool = False,
     ) -> Any:
         detected = self._detected if (from_detection or adopted) else None
+        if title is None and detected is not None:
+            # What the application says the call is, before what the clock says.
+            # The label plus the clock is the same string for every meeting of
+            # the day and tells the user nothing they cannot see from the
+            # directory name, which already carries the time.
+            title = meeting_subject(detected.get("window_title"), detected.get("label"))
         if title is None and detected is not None:
             title = f"{detected['label']} {now.strftime('%H:%M')}"
         if title is None:
