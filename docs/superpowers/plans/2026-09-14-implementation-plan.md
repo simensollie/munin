@@ -75,7 +75,7 @@ munin/
 | # | Milestone | Delivers | Blocked by | Exit criterion |
 |---|---|---|---|---|
 | M1 | Linux two-track capture | `capture/base.py` and `detect/base.py` first, then the Linux implementations; `munin-rec` captures on command and writes a session | — | A real Teams call yields `mic.opus` + `app.opus` with correct separation, and nothing above the boundary names a platform |
-| M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard; `munin split` and the `split` state (D26, added 2026-09-21) | M1 | Ad-hoc path works with no calendar and no detection; a two-meeting recording cuts into two sessions and the parent keeps its audio |
+| M2 | Spool, CLI, segments | State machine, `start/stop/toggle/status/list`, resume-into-same-session, disk guard; `munin split` and the `split` state (D26, added 2026-09-21); `munin discard` and the `discarded` state (D27, added 2026-10-06) | M1 | Ad-hoc path works with no calendar and no detection; a two-meeting recording cuts into two sessions and the parent keeps its audio |
 | M3 | Shell plugin | Detection, three notifications, bar states, dropdown panel; the split prompt and its panel button (D26, added 2026-09-21) | M0, M2 | Joining a Teams call prompts; the bar shows state throughout; a second call going live mid-recording offers a split |
 | M4 | Pipeline on `local` | Language routing, ASR, diarization, attribution tiers 1/3/4, output format | M1 | A captured meeting yields a conformant transcript |
 | M4a | GPU courtesy | `keep_warm = false` path, `defer_when_busy` VRAM check before claiming a session, CUDA OOM treated as an unreachable sink (D22, spec §8.2) | M4 | A session defers while the GPU is committed elsewhere and drains when it frees |

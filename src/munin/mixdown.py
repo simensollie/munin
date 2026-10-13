@@ -170,8 +170,10 @@ BUSY_STATES = frozenset({"recording", "ending"})
 #: (D26) -- mixing all three would put the merged recording in the upload folder
 #: beside the two meetings it was cut into. Shared with ``munin mix --all``
 #: rather than restated there: the two lists drifting apart is what let the
-#: worker export a parent the CLI knew to skip.
-SKIP_STATES = BUSY_STATES | frozenset({"split"})
+#: worker export a parent the CLI knew to skip. ``discarded`` (D27) has no
+#: audio left to mix, and a sweep that tried would report every discarded
+#: session as a failure.
+SKIP_STATES = BUSY_STATES | frozenset({"split", "discarded"})
 
 
 class MixdownError(RuntimeError):

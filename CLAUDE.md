@@ -45,7 +45,7 @@ Two companions:
 
 Two categories must not be confused:
 
-- **D1–D26 are settled.** Revisit only if the user explicitly reopens one.
+- **D1–D27 are settled.** Revisit only if the user explicitly reopens one.
 - **§14's open questions and Appendix D's "Not verified" list are open.** They
   need checking on real hardware. Never present them as decided, and never
   quietly resolve one by assumption — say what would have to be verified.
@@ -96,6 +96,11 @@ transcript samples in §7.5 use placeholder names (`Ola Nordmann`,
   meetings is cut into two *new* sessions; the parent keeps its audio and its
   checksums and moves to the terminal `split` state. The daemon offers the cut
   live when a different call goes live mid-recording, and never makes it alone.
+- **A discard deletes the audio and keeps the record** (D27). `munin discard`
+  is only for the recording in progress: the daemon stops the capturer,
+  deletes the tracks and moves `session.json` to the terminal `discarded`
+  state with the deletion in `history[]`. Captured audio is never deleted by
+  a user action; that is the retention pass's job. The panel asks twice.
 - **Naming a speaker and enrolling a voice are separate actions** (D17). A voice
   profile is a name and an embedding, stored locally under `~/munin/voices/`.
 - **The glossary is user-defined** (D8). `~/munin/glossary.toml` is written by

@@ -673,3 +673,37 @@ test("idle and saved audio use static level bars; only real transcription spins"
   assert.equal(M.barGlyphFor(done, later), M.GLYPH);
   assert.equal(M.visible(M.effectiveState(done, later)), true);
 });
+
+// ------------------------------------------------------------- discard (D27)
+
+test("a live recording offers Discard, on its own and never as the primary", () => {
+  for (const s of ["recording", "ending"]) {
+    assert.deepEqual(M.destructiveAction(s), { label: "Discard", argv: ["munin", "discard"] });
+    assert.notDeepEqual(M.primaryAction(s).argv, ["munin", "discard"], s);
+    assert.notDeepEqual(M.secondaryAction(s).argv, ["munin", "discard"], s);
+  }
+  for (const s of ["idle", "detected", "captured", "transcribing", "done", "failed"]) {
+    assert.equal(M.destructiveAction(s), null, s);
+  }
+});
+
+test("destructiveActionFor follows the effective state, not the raw one", () => {
+  const live = M.parseState(stateJson({ state: "recording" }));
+  assert.deepEqual(M.destructiveActionFor(live, T0), { label: "Discard", argv: ["munin", "discard"] });
+  // A state file the daemon stopped refreshing is not a live recording, so
+  // there is nothing to discard.
+  const stale = M.parseState(stateJson({ state: "recording" }));
+  assert.equal(M.destructiveActionFor(stale, T0 + 10 * 60 * 1000), null);
+});
+
+test("a discarded session reads as settled, not as a failure (D27)", () => {
+  const rows = M.parseSessions(
+    JSON.stringify({ sessions: [{ id: "s1", state: "discarded", title: "Quality sync" }] }),
+  );
+  assert.equal(rows[0].state, "discarded");
+  assert.equal(M.sessionGlyph(rows[0].state), M.GLYPH_DISCARDED);
+  assert.equal([...M.GLYPH_DISCARDED].length, 1);
+  assert.equal(M.GLYPH_DISCARDED.codePointAt(0), 0xf01b4); // md-delete, solid bin
+  assert.notEqual(M.sessionGlyph(rows[0].state), M.sessionGlyph("failed"));
+  assert.match(M.sessionMeta(rows[0]), /discarded, audio deleted/);
+});

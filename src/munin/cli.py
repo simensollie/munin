@@ -68,7 +68,7 @@ _START_HINT = (
 
 
 def build_parser() -> argparse.ArgumentParser:
-    """start, stop, toggle, status, list, mix, event, doctor, setup, daemon, worker."""
+    """start, stop, discard, toggle, status, list, mix, event, doctor, setup, daemon, worker."""
     parser = argparse.ArgumentParser(
         prog="munin",
         description="Munin: record a meeting as two tracks and queue it for transcription.",
@@ -89,6 +89,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
 
     sub.add_parser("stop", help="stop and finish the current recording")
+
+    sub.add_parser(
+        "discard",
+        help="stop the current recording and delete its audio; the record stays",
+    )
 
     toggle = sub.add_parser("toggle", help="start if idle, stop if recording")
     toggle.add_argument("title", nargs="?", default=None)
@@ -249,6 +254,17 @@ def _cmd_stop(args: argparse.Namespace) -> int:
     print(
         f"captured: {data.get('session_id')} "
         f"{_clock(data.get('duration_seconds'))} -> {data.get('session')}"
+    )
+    return EXIT_OK
+
+
+def _cmd_discard(args: argparse.Namespace) -> int:
+    from munin import ipc
+
+    data = ipc.call("discard")
+    print(
+        f"discarded: {data.get('session_id')} "
+        f"{_clock(data.get('duration_seconds'))} (audio deleted, record kept)"
     )
     return EXIT_OK
 
@@ -674,6 +690,7 @@ def _config() -> Any:
 _DISPATCH = {
     "start": _cmd_start,
     "stop": _cmd_stop,
+    "discard": _cmd_discard,
     "split": _cmd_split,
     "toggle": _cmd_toggle,
     "status": _cmd_status,
@@ -703,7 +720,7 @@ def main(argv: list[str] | None = None) -> int:
     try:
         return handler(args)
     except DaemonUnreachable as exc:
-        if args.command in ("start", "stop", "split", "toggle", "list", "event"):
+        if args.command in ("start", "stop", "discard", "split", "toggle", "list", "event"):
             print(_START_HINT, file=sys.stderr)
         else:
             print(str(exc), file=sys.stderr)

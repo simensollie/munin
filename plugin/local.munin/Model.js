@@ -32,9 +32,10 @@ var STATES = ["idle", "detected", "recording", "ending",
 // is captured, safe and waiting for a backend. It is not a bar state (the
 // daemon publishes it as `captured`), and it is emphatically not `failed` --
 // mapping it there painted a red alert on every recording in the PoC.
-// `split` (D26) is here for the same reason: a state missing from this list
-// arrives at the widget as "unknown", which is rendered exactly like a failure.
-var SESSION_STATES = STATES.concat(["pending", "split"]);
+// `split` (D26) and `discarded` (D27) are here for the same reason: a state
+// missing from this list arrives at the widget as "unknown", which is rendered
+// exactly like a failure.
+var SESSION_STATES = STATES.concat(["pending", "split", "discarded"]);
 
 // Persistent audio identity, shared by the bar, panel and saved sessions.
 // Level bars rather than a waveform: at the bar's 13 px icon font a waveform
@@ -50,6 +51,7 @@ var GLYPH_STOP = "󰓛";        // U+F04DB, stop square, for the Stop action
 var GLYPH_DONE = "󰸞";        // U+F0E1E, check, bold cut
 var GLYPH_FAILED = "󰀦";      // U+F0026, alert, solid triangle
 var GLYPH_FOLDER = "󰉋";       // folder, for the "open recordings" row
+var GLYPH_DISCARDED = "󰆴";    // U+F01B4, delete, solid bin: a discarded session
 
 // `done` is shown for 30 s after the last transcript lands, then the widget
 // goes back to hiding itself (spec 9.2).
@@ -468,6 +470,20 @@ function secondaryAction(state) {
     }
 }
 
+// The one destructive action, and the only one that is never the primary:
+// *Discard* stops the recording and deletes its audio (D27). It lives on its
+// own row below the pair, never beside *Stop and transcribe*, so a click
+// aimed at the usual place cannot land on it; the widget also asks twice.
+function destructiveAction(state) {
+    switch (String(state || "idle")) {
+    case "recording":
+    case "ending":
+        return { label: "Discard", argv: ["munin", "discard"] };
+    default:
+        return null;
+    }
+}
+
 // Seconds of D15's resume window still open after the last capture, or -1
 // when the question does not apply (not a finished session, no window
 // published, no `since`). `since` is the moment the daemon wrote the finished
@@ -507,6 +523,10 @@ function secondaryActionFor(view, nowMs) {
     var left = resumeSecondsLeft(view, nowMs);
     if (left > 0) return { label: "New recording", argv: ["munin", "start"] };
     return secondaryAction(effectiveState(view, nowMs));
+}
+
+function destructiveActionFor(view, nowMs) {
+    return destructiveAction(effectiveState(view, nowMs));
 }
 
 // Wrap an argv vector in a login shell without letting it be re-tokenized:
@@ -561,6 +581,8 @@ function sessionGlyph(state) {
     // work now. Left on the waiting glyph it would read as a session the
     // worker still owes the user a transcript for.
     case "split": return GLYPH_DONE;
+    // Audio deleted at the user's request (D27): settled, and not a failure.
+    case "discarded": return GLYPH_DISCARDED;
     case "failed":
     case "unknown": return GLYPH_FAILED;
     case "transcribing": return GLYPH_WORKING;
@@ -580,6 +602,7 @@ function sessionMeta(session) {
     if (session.pending_reason) parts.push(session.pending_reason);
     else if (session.state === "failed") parts.push("audio kept");
     else if (session.state === "split") parts.push("split in two");
+    else if (session.state === "discarded") parts.push("discarded, audio deleted");
     return parts.join(" · ");
 }
 

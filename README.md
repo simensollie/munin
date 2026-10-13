@@ -22,6 +22,8 @@ Until a backend runs locally, `munin mix` writes the mixed-down copy of spec §1
 (`mixed.opus`, or `--format mp3`) so a meeting can still be transcribed by hand
 elsewhere. `munin split` cuts a recording that turned out to hold two meetings
 into two sessions — live at the boundary, or afterwards in the file (D26).
+`munin discard` stops a recording that should not have been made and deletes
+its audio on the spot; the session record stays, marked `discarded` (D27).
 macOS and Windows are designed for but not built.
 
 Frozen contracts for the PoC: [`docs/superpowers/specs/2026-09-14-poc-contracts.md`](docs/superpowers/specs/2026-09-14-poc-contracts.md)

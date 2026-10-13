@@ -382,6 +382,7 @@ class Daemon:
             "status": self.handle_status,
             "start": self.handle_start,
             "stop": self.handle_stop,
+            "discard": self.handle_discard,
             "split": self.handle_split,
             "toggle": self.handle_toggle,
             "event": self.handle_event,
@@ -507,6 +508,111 @@ class Daemon:
         if not self.is_recording:
             raise IpcError("not_recording", "nothing is being recorded")
         return self._finish(auto=False)
+
+    def handle_discard(self, args: dict[str, Any]) -> dict[str, Any]:
+        """Stop the running recording and delete its audio (D27).
+
+        The one way audio leaves the store by a user action. ``session.json``
+        stays, in the terminal ``discarded`` state with the deletion in
+        ``history[]``: a reviewer can see that a recording was started and
+        thrown away, and nothing else. The session never reaches the inbox,
+        so the worker never sees it, and D15's resume cannot reopen it --
+        there is nothing to resume into.
+        """
+        if not self.is_recording:
+            raise IpcError("not_recording", "nothing is being recorded")
+        session = self.session
+        capturer = self.capturer
+        assert session is not None
+        now = self.clock()
+
+        if capturer is not None:
+            try:
+                capturer.stop()
+            except (CaptureError, NotImplementedError) as exc:
+                # Whatever the encoders left behind is about to be deleted,
+                # so a stop that produced nothing usable is not a failure here.
+                log.info("capture stop while discarding session=%s: %s",
+                         getattr(session, "id", None), exc)
+        self.capturer = None
+
+        directory = Path(getattr(session, "directory", ""))
+        segments = list(getattr(session, "segments", []) or [])
+        if segments:
+            segments[-1].stopped_at = now
+            started = getattr(segments[-1], "started_at", None)
+            if started is not None:
+                segments[-1].duration_seconds = (now - started).total_seconds()
+        session.stopped_at = now
+        session.duration_seconds = sum(
+            float(getattr(seg, "duration_seconds", 0.0) or 0.0) for seg in segments
+        )
+        deleted: list[str] = []
+        for segment in segments:
+            for name in (getattr(segment, "mic", None), getattr(segment, "app", None)):
+                if not name:
+                    continue
+                path = directory / name
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    continue
+                except OSError as exc:
+                    # Say so and carry on: a track that will not delete must not
+                    # leave the daemon holding a dead capturer in "recording".
+                    log.error("could not delete %s error=%s", path, exc)
+                    continue
+                deleted.append(name)
+
+        self.inhibit_idle(False)
+        self._transition(
+            session,
+            "discarded",
+            note="discarded by the user; audio deleted: " + (", ".join(deleted) or "none"),
+        )
+        try:
+            self.spool.unlink_inbox(session)
+        except Exception as exc:  # noqa: BLE001 - the inbox is an index, not the record
+            log.warning("could not unlink the inbox session=%s error=%s",
+                        getattr(session, "id", None), exc)
+
+        duration = float(session.duration_seconds or 0.0)
+        payload = {
+            "session": str(directory),
+            "session_id": getattr(session, "id", None),
+            "state": "discarded",
+            "duration_seconds": duration,
+            "deleted": deleted,
+        }
+
+        # Nothing was captured, so the bar has no session to point at. The call
+        # may still be live, in which case the daemon is back to watching it,
+        # and the panel offers Record again without a second prompt (D4: the
+        # user just said no to this one).
+        self.session = None
+        self._ending_since = None
+        self._warned = False
+        self._split_offered = set()
+        self._pending_call = None
+        self.state.state = "detected" if self._detected is not None else "idle"
+        self.state.since = now
+        self.state.started_at = None
+        self.state.title = None
+        self.state.session = None
+        self.state.session_id = None
+        self.state.segment = 0
+        self.state.grace_deadline = None
+        self.state.last_error = None
+        self._refresh_queue_depth()
+        self._write_state()
+
+        log.info(
+            "recording discarded session=%s duration=%.1fs deleted=%s",
+            payload["session_id"],
+            duration,
+            ",".join(deleted) or "-",
+        )
+        return payload
 
     def handle_split(self, args: dict[str, Any]) -> dict[str, Any]:
         """Finish the running recording here and start the next one (D26).

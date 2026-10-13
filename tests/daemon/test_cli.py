@@ -48,8 +48,8 @@ def test_the_parser_covers_every_command_in_the_contract() -> None:
     actions = [a for a in parser._actions if a.dest == "command"]
     assert actions, "there must be a subcommand slot"
     assert set(actions[0].choices) == {
-        "start", "stop", "split", "toggle", "status", "list", "mix", "event",
-        "doctor", "setup", "daemon", "worker", "m365",
+        "start", "stop", "discard", "split", "toggle", "status", "list", "mix",
+        "event", "doctor", "setup", "daemon", "worker", "m365",
     }
 
 
@@ -95,6 +95,22 @@ def test_a_resume_that_could_not_resume_says_so(fake_ipc, capsys) -> None:
 def test_stop_without_a_recording_exits_four(fake_ipc, capsys) -> None:
     fake_ipc(IpcError("not_recording", "nothing is being recorded"))
     assert cli.main(["stop"]) == cli.EXIT_PRECONDITION
+    assert "not_recording" in capsys.readouterr().err
+
+
+def test_discard_reports_the_deletion(fake_ipc, capsys) -> None:
+    fake = fake_ipc({"session_id": "2026-09-14T1325-x", "duration_seconds": 95.0,
+                     "state": "discarded", "deleted": ["mic.opus", "app.opus"]})
+    assert cli.main(["discard"]) == cli.EXIT_OK
+    assert fake.calls == [("discard", {})]
+    out = capsys.readouterr().out
+    assert "discarded: 2026-09-14T1325-x" in out
+    assert "audio deleted" in out
+
+
+def test_discard_without_a_recording_exits_four(fake_ipc, capsys) -> None:
+    fake_ipc(IpcError("not_recording", "nothing is being recorded"))
+    assert cli.main(["discard"]) == cli.EXIT_PRECONDITION
     assert "not_recording" in capsys.readouterr().err
 
 

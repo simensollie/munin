@@ -53,6 +53,7 @@ COMMANDS: tuple[str, ...] = (
     "status",
     "start",
     "stop",
+    "discard",
     "split",
     "toggle",
     "event",

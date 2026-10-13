@@ -47,6 +47,7 @@ window title is never re-tokenized by a shell:
 | That process stops holding both | `munin event call-ended [--pid N]` |
 | Panel primary button, bar middle-click | `munin start [--from-detection\|--resume]` / `munin stop` |
 | Panel secondary button while recording | `munin split --now` — one recording holding two meetings is cut here (D26, spec §6.4) |
+| Panel *Discard* button, or `d`, pressed twice | `munin discard` — stops the recording and deletes its audio; the record stays (D27, spec §6.3) |
 | Bar right-click | `munin toggle` |
 | Panel opens | `munin list --json --limit 5` |
 | Panel folder rows | `xdg-open` on `$MUNIN_HOME` or a session directory |
@@ -212,10 +213,18 @@ call-started` — that cancels the countdown; `start --resume` is not it, becaus
 the session is still recording. The *Stops at* row next to it says when the
 recording ends by itself if nobody does.
 
+**Discard** (D27) is the one destructive action and is kept off the action
+row: it sits on its own line under *Open session*, dim until armed. The first
+click or `d` arms it (the label becomes *Discard: delete the audio?* and turns
+urgent); the second runs `munin discard`. Closing the panel or a change of bar
+state disarms it. The daemon deletes the tracks and leaves `session.json` in
+the terminal `discarded` state, which the recent list renders with a bin glyph
+and "discarded, audio deleted" rather than the failure mark.
+
 ## What is deferred
 
 Everything sketch 04 draws that the PoC does not build: the calendar subtitle
-and participant count (M9), *Add marker*, *Discard*, backend status, the mixed
-track, and *Settings*. The panel's *Live input* block shows PipeWire's own
+and participant count (M9), *Add marker*, backend status, the mixed track,
+and *Settings*. *Discard* is built (D27). The panel's *Live input* block shows PipeWire's own
 levels and says so — the plugin has no access to the capture at all, and a
 meter that implied otherwise would be a lie about a recording.

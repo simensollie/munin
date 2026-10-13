@@ -1540,3 +1540,69 @@ capture and opening the next meets a real private sink and its loopback (§16.6)
 and the interaction with `calendar_event_id` at M9, where both halves would
 inherit one id and §11's duplicate-capture rule would read them as duplicates
 (spec §14 item 14).
+
+## 17. Discarding a live recording (D27, added 2026-10-06)
+
+The user pressed record on the wrong call, or on a conversation that turned out
+to be private. §0–§17 offered one exit, `stop`, which keeps the audio and queues
+it; the only way to be rid of it was to find the directory by hand, which is a
+deletion with no record of who made it or why. Spec §6.3 and D27 describe the
+behaviour. This section is the contract change.
+
+**§4, the state machine.** One terminal state and two transitions, both the
+daemon's and both from a live session:
+
+| From | To | Written by | When |
+|---|---|---|---|
+| `recording`/`ending` | `discarded` | `munin-rec` | `munin discard` stopped the capture and deleted the tracks. Terminal. |
+
+`discarded` is terminal and outside the worker's sweep. The session is never
+linked into `inbox/` and `resumable()` ignores it, so D15 cannot reopen it. The
+ownership rule of §4 is unchanged: once a session is `captured` it is the
+worker's, and nothing deletes its audio but the retention pass.
+
+**§2, the session directory.** On a discard the segment audio files named in
+`segments[].mic` and `segments[].app` are unlinked; `session.json` stays, with
+`segments[]`, `stopped_at` and `duration_seconds` filled in as on a stop and no
+`checksums` for files that no longer exist. The `history[]` row carries the note
+`discarded by the user; audio deleted: <names>`, so the record says what was
+removed without holding it.
+
+**§7.1, IPC.** One command, with `stop`'s precondition:
+
+| `cmd` | Args | `data` on success |
+|---|---|---|
+| `discard` | — | `{"session": "<abs path>", "session_id": str, "state": "discarded", "duration_seconds": float, "deleted": [str]}` |
+
+Errors: `not_recording` when nothing is live. A capturer that fails to stop is
+not an error here (whatever it left is about to go); the reply then carries an
+empty `deleted` list.
+
+**§7.2, `state.json`.** After a discard the daemon publishes `idle` with
+`session`, `session_id` and `title` null — nothing was captured, so the bar has
+nothing to point at — or `detected` when the call it was recording is still
+live, in which case the panel offers *Record* again and no second notification
+is sent (D4 was honoured for this call already).
+
+**§11, the CLI.** One row:
+
+| Command | Args | Does |
+|---|---|---|
+| `discard` | — | Stop the running recording and delete its audio; keep the record (spec §6.3, D27). Prints `discarded: <id> <HH:MM:SS> (audio deleted, record kept)`. |
+
+Exit codes are §11's: 4 (`not_recording`) with no live recording, 3 with no
+daemon.
+
+**The plugin.** `destructiveAction(state)` in `Model.js` returns *Discard*
+(`munin discard`) for `recording` and `ending`, and `null` otherwise; it is
+never the primary or the secondary action. The widget renders it on its own row
+under *Open session*, dim until armed: the first click or `d` arms it (label
+*Discard: delete the audio?*, urgent colour), the second runs it, and a panel
+close or a change of bar state disarms it. `discarded` joins `SESSION_STATES`
+and renders with a bin glyph (U+F01B4) and "discarded, audio deleted", never the
+failure mark. `munin mix --all` skips it.
+
+**What is not verified live.** The armed button and the `d` key in a running
+shell (no QML test runner on this machine, §16.4); a discard against a real
+PipeWire capturer, where `stop()` must bring the encoders down before the
+tracks are unlinked, which the fake does trivially.

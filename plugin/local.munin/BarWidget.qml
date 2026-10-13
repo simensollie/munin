@@ -18,7 +18,7 @@
 //   done          a tick, for 30 s
 //   failed        an exclamation, until it is acknowledged
 //
-// Actions run the CLI (`munin start|stop|toggle`). The widget never opens the
+// Actions run the CLI (`munin start|stop|discard|toggle`). The widget never opens the
 // daemon socket and never captures (D20, contracts 7.2). A shell reload
 // therefore cannot hold the daemon's socket open, and cannot kill a
 // recording.
@@ -130,6 +130,25 @@ Panel {
         root.close();
     }
 
+    // Discard (D27) deletes the audio, so it is the one action that asks
+    // twice: the first click (or `d`) arms it and the button changes its
+    // label; the second runs it. Anything else -- the panel closing, the
+    // bar state changing because the recording ended by other means --
+    // disarms it. `destructive` itself is rebuilt every clock tick, so its
+    // own change signal is the wrong thing to disarm on.
+    readonly property var destructive: Model.destructiveActionFor(root.status, root.nowMs)
+    property bool discardArmed: false
+
+    function runDestructive() {
+        if (!root.destructive) return;
+        if (!root.discardArmed) { root.discardArmed = true; return; }
+        root.discardArmed = false;
+        root.run(root.destructive.argv);
+        root.close();
+    }
+
+    onBarStateChanged: root.discardArmed = false
+
     // --- bar-facing shape ----------------------------------------------
 
     visible: Model.visible(barState)
@@ -140,6 +159,7 @@ Panel {
         // The meters are a live tap on PipeWire. Leaving them running behind
         // a closed popup would cost for nothing.
         if (root.muninService) root.muninService.metersEnabled = root.opened;
+        root.discardArmed = false;
         if (!opened) return;
         root.cursorActive = false;
         root.cursorIndex = -1;
@@ -327,6 +347,8 @@ Panel {
                 else if (t === "o" || t === "O") root.openPath(root.muninHome);
                 // k: keep recording, while the grace period is counting down.
                 else if (t === "k" || t === "K") root.runSecondary();
+                // d, twice: discard the recording and delete its audio (D27).
+                else if (t === "d" || t === "D") root.runDestructive();
             }
 
             Flickable {
@@ -524,6 +546,20 @@ Panel {
                             foreground: root.foreground
                             fontFamily: root.fontFamily
                             onClicked: { root.openPath(root.status.session); root.close(); }
+                        }
+
+                        // Its own row, last, and dim until armed: a destructive
+                        // action is never where the usual click lands.
+                        Button {
+                            visible: root.destructive !== null
+                            text: root.discardArmed
+                                ? "Discard: delete the audio?"
+                                : (root.destructive ? root.destructive.label : "")
+                            iconText: root.discardArmed ? Model.GLYPH_DISCARDED : ""
+                            bordered: true
+                            foreground: root.discardArmed ? root.urgent : root.dim
+                            fontFamily: root.fontFamily
+                            onClicked: root.runDestructive()
                         }
                     }
 

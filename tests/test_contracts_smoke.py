@@ -128,10 +128,15 @@ def test_state_machine_ownership() -> None:
             assert writer == expected, (src, dst, writer)
         if dst == "split":
             assert writer == "munin", (src, dst, writer)
+        if dst == "discarded":
+            # D27: only the process holding the capturer may throw a recording
+            # away, and only while it holds it.
+            assert writer == "munin-rec", (src, dst, writer)
+            assert src in {"recording", "ending"}, (src, dst)
 
 
 def test_nothing_leaves_a_terminal_state() -> None:
-    """``done``, ``failed`` and ``split`` are where a session stops."""
+    """``done``, ``failed``, ``split`` and ``discarded`` are where a session stops."""
     assert TERMINAL <= set(STATES)
     for source, target in TRANSITIONS:
         assert source not in TERMINAL, (source, target)

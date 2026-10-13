@@ -91,6 +91,7 @@ second customer name appears zero times in 756,000 words.
 | D24 | The session directory is the only place a transcript is written; no copy goes to the second brain | A second copy in a personal vault made work records live in two stores with two retention policies and one access-control boundary between them (§12). The tree is `grep -r`-searchable, so the copy bought convenience that was already there (§7.5) |
 | D26 | One recording that holds two meetings is split into two sessions, never left as one and never cut in place | Walking from one meeting into the next without stopping the recording is the failure this tool was built around a user having. The record is what is wrong, not the audio: one file means diarization clusters speakers across both meetings, two sets of participants share one transcript, one retention clock and one access boundary (§12), and the second meeting carries the first one's title. A split is offered live at the boundary (§6.4) and can be made afterwards (`munin split`); the parent keeps its audio and its checksums either way, because a store that rewrites what it captured has no integrity left to show an auditor |
 | D25 | The Plaud export is a stopgap, removed once the local pipeline transcribes | §10 exists because `backend = "none"` leaves no other route from a recording to text. When M4 produces transcripts on this machine, the mix, `munin mix` and the upload folder are deleted rather than maintained, and D11's retention of mixed audio ends with them. What removal costs is the summary (§10) |
+| D27 | A live recording can be discarded: the audio is deleted, the record stays | Pressing record on the wrong call, or on a conversation that turned out to be private, is a failure the user notices while it is happening, and the fix has to be as reachable as *Stop* (§6.3). The audio goes immediately, which is the smallest set of personal data to hold; `session.json` stays in a terminal `discarded` state with the deletion in `history[]`, so an auditor can see that a recording was started and thrown away. Only the daemon may do it and only while it holds the capturer: a session that has been captured belongs to the worker and to the retention pass (§11), never to a button. Added 2026-10-06 |
 
 ## 5. Architecture
 
@@ -228,8 +229,16 @@ session.
 ```
 munin start [title]      # or SUPER + SHIFT + R, or click the bar indicator
 munin stop
+munin discard            # stop, delete the audio, keep the record (D27)
 munin status
 ```
+
+**Discard is a first-class exit too** (D27). `munin discard`, or the panel's
+*Discard* button (asked twice), stops the capture, deletes the two tracks and
+leaves `session.json` behind in the terminal `discarded` state with the deletion
+on the record. The session never enters the inbox, so the worker never sees it,
+and it cannot be resumed. If the call is still live afterwards the bar goes back
+to `detected`, without a second prompt.
 
 **Calendar is enrichment only** (§7.6). No match means an ad-hoc call: the title
 falls back to a prompt, then to a timestamp. The calendar never starts or stops
@@ -727,6 +736,12 @@ States rendered, one at a time:
 | transcribing | turning refresh glyph with queue depth | Worker running; level bars instead when transcription is disabled |
 | done | ✓ for 30 s, then level bars | Transcript landed |
 | failed | ! until acknowledged | Audio retained; a failure that hides itself is a lost meeting |
+
+While recording, the panel's action row holds *Stop and transcribe* and *Split
+here*; *Discard* (D27) sits on its own row below, dim until the first click or
+`d` arms it, and only the second runs `munin discard`. A destructive action is
+never where the usual click lands. In the recent list a discarded session shows
+a bin glyph and "discarded, audio deleted", never the failure mark.
 ### 9.3 Keybinding
 
 In `~/.config/hypr/bindings.lua`, following the existing idiom and unbinding
@@ -778,6 +793,7 @@ munin voice disable ola
 munin voice delete ola
 munin voice reembed --all
 munin review
+munin discard                           # the running recording: delete the audio, keep the record (D27)
 munin split --now                       # the running recording, at this moment
 munin split <session> 27:32             # a captured one, at an offset
 munin split <session> --clock 14:02     # or at a time of day
@@ -929,9 +945,12 @@ The design principle is that transcripts arrive late, never missing.
 | Disk fills | Refuse to start a new capture below a configured threshold and alert, rather than truncating. |
 | Duplicate capture (two machines in the same meeting) | Sessions carry the calendar event ID; the worker keeps the longest and discards the rest. |
 | Two meetings in one recording (nobody stopped between them) | The daemon offers a split when a different call goes live mid-recording; afterwards, `munin split` cuts the session in two. The parent keeps its audio and leaves the queue (D26, §6.4). |
+| Wrong call recorded, or one that should not have been | `munin discard` (or the panel's *Discard*, asked twice) stops the capture and deletes the audio at once. `session.json` stays in the terminal `discarded` state with the deletion in `history[]`; the session never reaches the worker and cannot be resumed (D27, §6.3). |
 
 Spool sessions are never deleted by the worker, only marked `done`. A separate
-retention pass handles cleanup (§10).
+retention pass handles cleanup (§10). The one deletion a user action performs is
+a discard of a *live* recording (D27); once captured, audio leaves the store
+only through retention.
 
 ## 12. Compliance and privacy
 
@@ -974,6 +993,15 @@ Flagging explicitly rather than burying it:
   see what was captured and what was derived from it. The cost is that a split
   leaves two copies of the same audio until retention removes one, which is the
   same open decision as everything else here.
+- **A discard deletes audio, and only audio** (D27, §6.3). It is the one
+  user action that removes personal data from the store, and it is limited to
+  the recording still in progress: the shortest possible exposure for a call
+  that should not have been recorded, with no window in which the audio sat
+  in the queue. The record of the recording is kept -- `session.json` with
+  its `history[]` saying when it started, when it was discarded and which
+  tracks were deleted -- so the audit trail shows the event without holding
+  the content. Captured audio is out of scope on purpose: deleting it is the
+  retention pass's decision, not a button's.
 - **Personal vault, work content.** Settled by D24. The second brain is personal
   and transcripts of customer meetings are company records, so Munin no longer
   writes into it. The authoritative copy is the session directory under

@@ -78,6 +78,7 @@ SessionState = Literal[
     "done",
     "failed",
     "split",
+    "discarded",
 ]
 
 STATES: tuple[str, ...] = (
@@ -89,6 +90,7 @@ STATES: tuple[str, ...] = (
     "done",
     "failed",
     "split",
+    "discarded",
 )
 
 #: ``(from, to) -> writer``. The only legal transitions, and who may write them.
@@ -117,10 +119,18 @@ TRANSITIONS: dict[tuple[str | None, str], str] = {
     ("captured", "split"): "munin",
     ("pending", "split"): "munin",
     (None, "captured"): "munin",
+    # D27: a live recording the user throws away. The daemon stops the
+    # capturer, deletes the audio and leaves ``session.json`` behind with the
+    # history that says so -- the record of a recording that was made and
+    # discarded is kept, its content is not. Only a live session can go here:
+    # once captured, a session is the worker's, and deleting it is retention's
+    # job (spec 11), not a button's.
+    ("recording", "discarded"): "munin-rec",
+    ("ending", "discarded"): "munin-rec",
 }
 
 #: Terminal states: nothing transitions out of them.
-TERMINAL: frozenset[str] = frozenset({"done", "failed", "split"})
+TERMINAL: frozenset[str] = frozenset({"done", "failed", "split", "discarded"})
 
 #: States the daemon may find after its own crash, and what they become.
 DAEMON_STATES: frozenset[str] = frozenset({"recording", "ending"})
