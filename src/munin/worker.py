@@ -30,7 +30,7 @@ from munin.backends.base import BackendUnavailable
 from munin.config import Config, load as load_config
 from munin.enrich import Enricher
 from munin.pipeline import run as run_pipeline
-from munin.pipeline.render import adjust_segments, render_transcript
+from munin.pipeline.render import adjust_segments, mic_degraded_lines, render_transcript
 from munin.spool import Segment, Session, Spool, StateError
 
 __all__ = ["Worker", "main"]
@@ -253,6 +253,10 @@ class Worker:
         gaps = _compute_gaps(session.segments)
         adjusted, adjustments = adjust_segments(transcript.segments)
         text = render_transcript(transcript, gaps=gaps)
+        notices = mic_degraded_lines(session.history)
+        if notices:
+            # D28: a segment captured from a dead microphone says so up front.
+            text = "\n".join(notices) + "\n" + text
 
         txt_path = Path(session.directory) / "transcript.txt"
         txt_path.write_text(text, encoding="utf-8")

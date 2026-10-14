@@ -183,6 +183,14 @@ class FakeSession:
         self.state = to
         self.save()
 
+    def record_event(self, event: str, *, at: datetime | None = None, **fields: Any) -> dict:
+        """Mirrors ``Session.record_event``: an audit row that is not a transition."""
+        entry: dict[str, Any] = {"event": event, "at": _iso(at or self._now())}
+        entry.update(fields)
+        self.history.append(entry)
+        self.save()
+        return entry
+
 
 def _iso(value: datetime | None) -> str | None:
     return None if value is None else value.isoformat(timespec="seconds")
@@ -350,6 +358,8 @@ class FakeCapturer(Capturer):
         self.app_source = "silent" if app is None else "stream"
         #: Track kinds the test has killed mid-capture.
         self.dead_tracks: list[str] = []
+        #: Non-fatal notes, as ``PipewireCapturer.warnings`` carries them.
+        self.warnings: list[str] = []
 
     @property
     def is_running(self) -> bool:

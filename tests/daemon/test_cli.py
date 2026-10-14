@@ -381,3 +381,41 @@ def test_split_parses_both_titles_and_a_clock() -> None:
     assert args.title == "Supplier audit follow-up"
     assert args.title_first == "Weekly quality sync"
     assert args.now is False
+
+
+# --- microphone preflight (D28) --------------------------------------------
+def test_status_prints_a_degraded_microphone(fake_ipc, capsys) -> None:
+    fake_ipc({"state": "detected", "mic_health": {
+        "state": "degraded", "reason": "profile-off", "label": "Headset",
+        "checked_at": "2026-10-14T13:01:23+02:00"}})
+    assert cli.main(["status"]) == cli.EXIT_OK
+    lines = capsys.readouterr().out.strip().splitlines()
+    assert lines[0] == "state: detected"
+    assert lines[1] == (
+        "microphone: degraded (profile-off): Headset is connected but has no audio profile"
+    )
+
+
+def test_status_says_nothing_about_a_healthy_microphone(fake_ipc, capsys) -> None:
+    for health in (None, {"state": "ok", "reason": None, "label": "Headset",
+                          "checked_at": "2026-10-14T13:01:23+02:00"}):
+        fake_ipc({"state": "idle", "mic_health": health})
+        cli.main(["status"])
+        assert "microphone" not in capsys.readouterr().out
+
+
+def test_status_prints_an_unknown_microphone(fake_ipc, capsys) -> None:
+    fake_ipc({"state": "idle", "mic_health": {"state": "unknown", "reason": None,
+                                              "label": None, "checked_at": None}})
+    cli.main(["status"])
+    assert capsys.readouterr().out.strip().splitlines()[-1] == "microphone: unknown"
+
+
+def test_event_audio_repaired_reports_the_roll(fake_ipc, capsys) -> None:
+    fake = fake_ipc({"accepted": True, "state": "recording", "rolled": True, "segment": 2,
+                     "mic_health": {"state": "ok"}})
+    assert cli.main(["event", "audio-repaired"]) == cli.EXIT_OK
+    assert fake.calls[0][1]["event"] == "audio-repaired"
+    assert capsys.readouterr().out.strip() == (
+        "audio-repaired: accepted=true state=recording rolled=true segment=2"
+    )

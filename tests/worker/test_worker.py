@@ -146,6 +146,25 @@ def test_process_success_writes_transcript_and_transitions_to_done(tmp_path, mon
     assert worker.spool.unlinked == [session.id]
 
 
+def test_a_degraded_segment_is_announced_before_the_transcript(tmp_path, monkeypatch):
+    """D28: a transcript of silence must not pass for a quiet meeting."""
+    session = _make_session(tmp_path, state="pending")
+    session.history.append(
+        {"event": "mic_degraded", "at": "2026-10-14T13:01:23+02:00", "segment": 1,
+         "reason": "profile-off", "label": "Headset"}
+    )
+    worker = Worker(_config(tmp_path))
+    worker.spool = FakeSpool([session])
+    monkeypatch.setattr("munin.worker.get_backend", lambda name: SucceedingBackend())
+
+    worker.process(session)
+
+    assert (session.directory / "transcript.txt").read_text(encoding="utf-8") == (
+        "[microphone degraded for segment 1: connected but has no audio profile]\n"
+        "[00:00:00 - 00:00:02] Ola Nordmann: Hei.\n"
+    )
+
+
 def test_process_none_backend_leaves_pending_reason(tmp_path):
     """The PoC's actual configured backend (contracts section 10): the exact
     reason string is part of the contract, not just "some message"."""

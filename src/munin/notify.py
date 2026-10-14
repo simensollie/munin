@@ -31,6 +31,7 @@ __all__ = [
     "auto_stopped",
     "track_failed",
     "capture_widened",
+    "mic_degraded",
     "replace_id_for",
     "format_clock",
     "build_argv",
@@ -226,6 +227,39 @@ def recording_system_output(*, session_id: str | None = None) -> Notification:
         urgency="normal",
         timeout_ms=15000,
         replaces_id=replace_id_for(session_id),
+    )
+
+
+def mic_degraded(
+    label: str,
+    reason_text: str,
+    repair: Sequence[str],
+    *,
+    session_id: str | None = None,
+) -> Notification:
+    """The microphone cannot deliver audio, at call detection or capture start (D28).
+
+    Sent *in addition to* "Meeting detected", never instead: D4 says the user
+    decides whether to record, and a degraded microphone is a warning on the
+    record, not a veto. The one action is the repair, ``[capture]
+    audio_repair`` (``munin-audiofix`` by default); the caller does not send
+    this at all when that key is empty.
+
+    Its replace id is the session's plus a suffix, so it replaces itself (once
+    per session) without replacing the session's other notifications -- a
+    "Recording all desktop audio" warning must not be wiped by this one.
+    """
+    key = f"{session_id or 'detected'}:microphone"
+    return Notification(
+        title="Microphone not working",
+        body=(
+            f"{label} is {reason_text}. Recording will have no mic audio. "
+            "Click to fix audio."
+        ),
+        action=tuple(repair) or None,
+        urgency="critical",
+        timeout_ms=30000,
+        replaces_id=replace_id_for(key),
     )
 
 

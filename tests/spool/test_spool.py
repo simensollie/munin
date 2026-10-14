@@ -281,6 +281,38 @@ def test_a_transition_carries_fields_into_the_file(spool: Spool) -> None:
     assert on_disk.pending_reason == "no transcription backend configured"
 
 
+def test_an_event_row_is_audited_without_a_transition(spool: Spool) -> None:
+    """D28: a degraded microphone is a fact on the record, not a state."""
+    session = spool.create(title="Ghost headset", source="adhoc")
+    before = len(read_session(session.directory).history)
+    at = datetime(2026, 10, 14, 13, 1, 23).astimezone()
+    entry = session.record_event(
+        "mic_degraded", at=at, segment=1, reason="profile-off", label="Headset"
+    )
+    on_disk = read_session(session.directory)
+    assert on_disk.state == "recording"
+    assert len(on_disk.history) == before + 1
+    assert on_disk.history[-1] == entry == {
+        "event": "mic_degraded",
+        "at": at.isoformat(timespec="seconds"),
+        "segment": 1,
+        "reason": "profile-off",
+        "label": "Headset",
+    }
+    # Transitions still work after an event row, and keep it.
+    session.transition("captured", by=REC)
+    assert read_session(session.directory).history[before]["event"] == "mic_degraded"
+
+
+def test_an_event_row_does_not_roll_back_a_row_written_elsewhere(spool: Spool) -> None:
+    session = spool.create(title="Two writers", source="adhoc")
+    other = read_session(session.directory)
+    other.record_event("audio_repaired", segment=2)
+    session.record_event("mic_degraded", segment=2, reason="default-sink-missing", label="X")
+    events = [row.get("event") for row in read_session(session.directory).history]
+    assert events[-2:] == ["audio_repaired", "mic_degraded"]
+
+
 def test_a_transition_cannot_set_state_or_history_behind_the_machine(
     spool: Spool,
 ) -> None:

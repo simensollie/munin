@@ -328,6 +328,92 @@ def check_default_source(env: DoctorEnv) -> CheckResult:
     )
 
 
+# ---------------------------------------------------------------------------
+# Checks: microphone health (D28). Same assessment the daemon makes at call
+# detection and capture start, so a ghost device is visible without a call.
+# ---------------------------------------------------------------------------
+
+#: What to run when one of the checks below fails.
+REPAIR_HINT = "run munin-audiofix (or the panel's Fix audio)"
+
+
+def check_default_sink(env: DoctorEnv) -> CheckResult:
+    from munin.capture import health
+
+    objects, problem = _pw_dump(env)
+    if problem:
+        return CheckResult("default sink", "fail", problem)
+    name = health.configured_default_sink(objects)
+    if name is None:
+        return CheckResult(
+            "default sink", "warn", "no default.configured.audio.sink in the default metadata"
+        )
+    for obj in objects:
+        if obj.get("type") != "PipeWire:Interface:Node":
+            continue
+        props = _props(obj)
+        if props.get("node.name") == name:
+            label = props.get("node.description") or name
+            return CheckResult("default sink", "ok", f"{label} ({name})")
+    return CheckResult(
+        "default sink",
+        "fail",
+        f"configured default {name!r} no longer exists (a ghost device); {REPAIR_HINT}",
+    )
+
+
+def check_mic_health(env: DoctorEnv) -> CheckResult:
+    from munin.capture import health
+
+    objects, problem = _pw_dump(env)
+    if problem:
+        return CheckResult("mic health", "warn", f"unknown: {problem}")
+    verdict = health.assess(objects, mic_source=env.config.capture.mic_source)
+    if verdict.degraded:
+        return CheckResult(
+            "mic health", "fail", f"{verdict.sentence()} ({verdict.reason}); {REPAIR_HINT}"
+        )
+    return CheckResult("mic health", "ok", verdict.label or "no signal of a ghost device")
+
+
+def check_bluetooth_profile(env: DoctorEnv) -> CheckResult:
+    from munin.capture import health
+
+    objects, problem = _pw_dump(env)
+    if problem:
+        return CheckResult("bluetooth profile", "warn", f"unknown: {problem}")
+    cards = health.bluez_cards(objects)
+    if not cards:
+        return CheckResult("bluetooth profile", "skip", "no Bluetooth audio card")
+    parts: list[str] = []
+    broken: list[str] = []
+    for card in cards:
+        line = f"{card.get('label')}: {card.get('profile') or 'unknown'} ({card.get('connection') or 'unknown'})"
+        parts.append(line)
+        if card.get("connection") == "connected" and card.get("profile") == "off":
+            broken.append(str(card.get("label")))
+    if broken:
+        return CheckResult(
+            "bluetooth profile",
+            "fail",
+            f"{', '.join(broken)} connected with no audio profile; {REPAIR_HINT}",
+        )
+    return CheckResult("bluetooth profile", "ok", "; ".join(parts))
+
+
+def check_bluetoothctl(env: DoctorEnv) -> CheckResult:
+    """Needed by munin-audiofix only, so missing is a warning: Munin records
+    fine without it, it just cannot reconnect a headset for you."""
+    found = env.which("bluetoothctl")
+    if found is None:
+        return CheckResult(
+            "bluetoothctl",
+            "warn",
+            "not on PATH; munin-audiofix cannot reconnect a headset (omarchy pkg add bluez-utils)",
+        )
+    return CheckResult("bluetoothctl", "ok", found)
+
+
 def check_detection(env: DoctorEnv) -> CheckResult:
     """What the detector can see right now, whatever ``detection.source`` says."""
     try:
@@ -817,6 +903,10 @@ CHECKS: tuple[Check, ...] = (
     Check("XDG_RUNTIME_DIR", "all", check_runtime_dir),
     Check("pipewire", "linux", check_pipewire),
     Check("default source", "linux", check_default_source),
+    Check("default sink", "linux", check_default_sink),
+    Check("mic health", "linux", check_mic_health),
+    Check("bluetooth profile", "linux", check_bluetooth_profile),
+    Check("bluetoothctl", "linux", check_bluetoothctl),
     Check("detection", "linux", check_detection),
     Check("omarchy cli", "linux", check_omarchy),
     Check("plugin installed", "linux", check_plugin_installed),

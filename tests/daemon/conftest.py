@@ -14,6 +14,7 @@ from typing import Any
 
 import pytest
 
+from munin.capture.health import MicHealth
 from munin.config import Config, DetectionConfig, IdleConfig, NotificationConfig
 from munin.daemon import Daemon
 from munin.notify import Notification
@@ -32,6 +33,28 @@ class QuietDetector:
 
 
 @dataclass
+class MicStub:
+    """Stands in for the microphone health check (D28), so no test reads
+    PipeWire. Set ``verdict``; ``calls`` counts how often the daemon asked."""
+
+    verdict: MicHealth = field(default_factory=lambda: MicHealth(state="ok", label="Headset"))
+    calls: int = 0
+    raises: bool = False
+
+    def __call__(self) -> MicHealth:
+        self.calls += 1
+        if self.raises:
+            raise RuntimeError("pw-dump went away")
+        return self.verdict
+
+    def degrade(self, reason: str = "default-sink-missing", label: str = "Headset") -> None:
+        self.verdict = MicHealth(state="degraded", reason=reason, label=label)
+
+    def heal(self) -> None:
+        self.verdict = MicHealth(state="ok", label="Headset")
+
+
+@dataclass
 class Harness:
     daemon: Daemon
     clock: FakeClock
@@ -40,6 +63,7 @@ class Harness:
     state_path: Path
     notifications: list[Notification] = field(default_factory=list)
     idle_calls: list[list[str]] = field(default_factory=list)
+    mic: MicStub = field(default_factory=MicStub)
 
     def state_json(self) -> dict[str, Any]:
         """The state file as the plugin would read it."""
@@ -85,6 +109,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
         return 0
 
     state_path = run / "munin" / "state.json"
+    mic = MicStub()
     daemon = Daemon(
         config,
         spool=spool,
@@ -95,6 +120,7 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
         detector=QuietDetector(),
         socket_path_override=run / "munin" / "rec.sock",
         state_path_override=state_path,
+        mic_probe=mic,
     )
     return Harness(
         daemon=daemon,
@@ -104,4 +130,5 @@ def harness(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Harness:
         state_path=state_path,
         notifications=notifications,
         idle_calls=idle_calls,
+        mic=mic,
     )

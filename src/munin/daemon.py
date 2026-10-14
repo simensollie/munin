@@ -46,6 +46,8 @@ from munin.capture.base import (
     SessionRef,
     segment_filenames,
 )
+from munin.capture import health as mic_health
+from munin.capture.health import MicHealth
 from munin.config import Config
 from munin.desktop import IdleInhibitor, get_idle_inhibitor
 from munin.ipc import AlreadyRunning, IpcError, Server, socket_path
@@ -169,6 +171,13 @@ class RuntimeState:
     #: beside it -- otherwise a click meant as "new" inside the window glues
     #: the audio onto the previous session.
     resume_window_seconds: int = 600
+    #: The last microphone health check (D28), as ``MicHealth.to_dict()``, or
+    #: ``None`` before the first one. Checked at call detection, at every
+    #: segment start and when a track dies; the panel shows it when degraded.
+    mic_health: dict | None = None
+    #: ``[capture] audio_repair``, so the panel offers *Fix audio* with the
+    #: user's command rather than one compiled into the plugin. "" disables it.
+    audio_repair: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -188,6 +197,8 @@ class RuntimeState:
             "detection_rules": list(self.detection_rules),
             "transcription_backend": self.transcription_backend,
             "resume_window_seconds": self.resume_window_seconds,
+            "mic_health": dict(self.mic_health) if self.mic_health is not None else None,
+            "audio_repair": self.audio_repair,
             "updated_at": _iso(_now()),
             "daemon_pid": self.daemon_pid,
         }
@@ -286,6 +297,7 @@ ISOLATED_APP_SOURCES = frozenset({"process-sink", "stream"})
 
 CapturerFactory = Callable[[CaptureTarget, CaptureTarget | None], Capturer]
 Notifier = Callable[[Notification], bool]
+MicProbe = Callable[[], MicHealth]
 Runner = Callable[[Sequence[str]], int]
 
 
@@ -305,6 +317,7 @@ class Daemon:
         idle_inhibitor: IdleInhibitor | None = None,
         socket_path_override: Path | None = None,
         state_path_override: Path | None = None,
+        mic_probe: MicProbe | None = None,
     ) -> None:
         self.config = config
         self.state = RuntimeState(
@@ -312,6 +325,12 @@ class Daemon:
             detection_rules=_rule_rows(config),
             transcription_backend=config.transcribe.backend,
             resume_window_seconds=config.detection.resume_window_seconds,
+            audio_repair=config.capture.audio_repair,
+        )
+        #: One read of the audio graph, assessed (D28). Platform-free: which
+        #: tool is read is the capture package's business.
+        self.mic_probe = mic_probe or (
+            lambda: mic_health.check(self.config.capture.mic_source, now=self.clock())
         )
         self.clock = clock or _now
         self.spool = spool if spool is not None else _default_spool(config)
@@ -344,6 +363,10 @@ class Daemon:
         self._last_health_poll: datetime | None = None
         self._health_warned: set[str] = set()
         self._last_state_write: datetime | None = None
+        #: Whether "Microphone not working" has been sent for the call or the
+        #: session in hand. Once per session (spec 2026-10-14 section 5.3): a
+        #: ghost does not clear by itself, and a prompt per segment is noise.
+        self._mic_warned = False
         self._stopping = False
         #: Did *this* process take the stay-awake hold? Only what we took may be
         #: released -- ``state.idle_was_inhibited`` records the prior state, and
@@ -468,6 +491,11 @@ class Daemon:
         self.capturer = capturer
         self._last_health_poll = None
         self._health_warned = set()
+        if not resumed and not from_detection:
+            # A fresh ad-hoc session has been warned about nothing yet. A
+            # start that answers a detection keeps what the detection said:
+            # that call was already told, and telling it twice is noise.
+            self._mic_warned = False
         session.capture_method = getattr(capturer, "method", None)
         if getattr(session, "started_at", None) is None:
             session.started_at = getattr(segment, "started_at", None) or now
@@ -489,6 +517,7 @@ class Daemon:
         self.state.last_error = None
         self._ending_since = None
         self._warned = False
+        self._mic_check_at_segment_start(session, capturer, self._segment_index)
         # Whatever was offered as a split belongs to the session that just
         # ended; this one has been asked nothing yet.
         self._split_offered = set()
@@ -780,8 +809,13 @@ class Daemon:
     def handle_event(self, args: dict[str, Any]) -> dict[str, Any]:
         """``call-started`` / ``call-ended`` evidence from the plugin or poller."""
         event = args.get("event")
-        if event not in ("call-started", "call-ended"):
-            raise IpcError("bad_request", "event must be call-started or call-ended")
+        if event not in ("call-started", "call-ended", "audio-repaired"):
+            raise IpcError(
+                "bad_request", "event must be call-started, call-ended or audio-repaired"
+            )
+        if event == "audio-repaired":
+            # Not detection evidence, so detection being off does not gate it.
+            return self.on_audio_repaired()
         if not self.config.detection.enabled:
             return {"accepted": False, "state": self.state.state}
         pid = args.get("pid")
@@ -860,6 +894,11 @@ class Daemon:
         }
         self.state.state = "detected"
         self.state.since = self.clock()
+        verdict = None
+        if first_sighting:
+            # A new call is a new chance to be told about the microphone.
+            self._mic_warned = False
+            verdict = self._check_mic()
         self._write_state()
         if first_sighting:
             # D4: suggest, never auto-record.
@@ -871,6 +910,11 @@ class Daemon:
                     subject=event.subject if event is not None else None,
                 )
             )
+            # D28: in addition to "Meeting detected", never instead. The user
+            # still decides whether to record; they decide knowing the mic is
+            # dead, while there is still time to fix it.
+            if verdict is not None and verdict.degraded:
+                self._notify_mic(verdict, session_id=None)
         log.info("call detected pid=%s app=%s", pid, detected["label"])
         return True
 
@@ -1013,6 +1057,10 @@ class Daemon:
 
     def _forget_detected(self) -> None:
         """Drop every trace of the call the daemon was watching."""
+        if not self.is_recording:
+            # The next call is a new chance to be told; a recording keeps its
+            # once-per-session promise until it ends.
+            self._mic_warned = False
         self._detected = None
         self._pending_call = None
         self._split_offered = set()
@@ -1047,6 +1095,192 @@ class Daemon:
         self.state.grace_deadline = None
         self._write_state()
         log.info("grace period cancelled session=%s", self.state.session_id)
+
+    # --- microphone health (D28) ----------------------------------------
+    def _check_mic(self) -> MicHealth:
+        """One health check, published in the state file. Never raises.
+
+        A probe that fails is ``unknown``, and everything carries on exactly as
+        it did before this check existed: it must never block detection.
+        """
+        try:
+            verdict = self.mic_probe()
+            if not isinstance(verdict, MicHealth):
+                raise TypeError(f"mic probe returned {type(verdict).__name__}")
+        except Exception as exc:  # noqa: BLE001 - a health check is never fatal
+            log.warning("microphone health check failed error=%s", exc)
+            verdict = MicHealth(state="unknown", checked_at=self.clock())
+        self.state.mic_health = verdict.to_dict()
+        if verdict.degraded:
+            log.warning(
+                "microphone degraded reason=%s label=%s session=%s",
+                verdict.reason,
+                verdict.label,
+                self.state.session_id,
+            )
+        return verdict
+
+    def _notify_mic(self, verdict: MicHealth, *, session_id: str | None) -> None:
+        """*Microphone not working*, once per call or session, if a repair is set."""
+        if self._mic_warned:
+            return
+        repair = self.config.capture.audio_repair_argv
+        if not repair:
+            # `audio_repair = ""` removes the action, and "click to fix audio"
+            # with nothing behind the click is worse than no prompt. The state
+            # file and history[] still say it.
+            return
+        self._mic_warned = True
+        self.notifier(
+            notify.mic_degraded(
+                verdict.label or "The microphone",
+                mic_health.describe_reason(verdict.reason),
+                repair,
+                session_id=session_id,
+            )
+        )
+
+    def _mic_check_at_segment_start(
+        self, session: Any, capturer: Capturer, index: int
+    ) -> MicHealth:
+        """The capture-start moment of spec 5.2: check, and put a bad answer
+        on the record.
+
+        Recording has already started and stays started (D4). A degraded
+        verdict is appended to the capturer's warnings, written to
+        ``history[]`` as ``mic_degraded`` for this segment, and notified once.
+        """
+        verdict = self._check_mic()
+        if not verdict.degraded:
+            return verdict
+        warnings = getattr(capturer, "warnings", None)
+        message = f"microphone degraded: {verdict.sentence()} ({verdict.reason})"
+        if isinstance(warnings, list) and message not in warnings:
+            warnings.append(message)
+        self._record_event(
+            session,
+            "mic_degraded",
+            segment=index,
+            reason=verdict.reason,
+            label=verdict.label,
+        )
+        self._notify_mic(verdict, session_id=getattr(session, "id", None))
+        return verdict
+
+    def _record_event(self, session: Any, event: str, **fields: Any) -> None:
+        """An audit row in ``history[]`` that is not a transition. Never fatal."""
+        record = getattr(session, "record_event", None)
+        if record is None:
+            return
+        try:
+            record(event, at=self.clock(), **fields)
+        except Exception as exc:  # noqa: BLE001 - the recording is not at risk
+            log.warning(
+                "could not record %s on session=%s error=%s",
+                event,
+                getattr(session, "id", None),
+                exc,
+            )
+
+    def on_audio_repaired(self) -> dict[str, Any]:
+        """``munin-audiofix`` exited 0 (D28): re-check, and roll a live segment.
+
+        What a WirePlumber restart does to a recorder already pinned to the
+        old microphone node is not verified (spec 2026-10-14 section 7). The
+        recorder is known to fall back to the default source when its target
+        disappears, which would be a silent wrong microphone. So while
+        recording, the current segment is ended and a new one started against
+        the rebuilt graph -- the same boundary a resume makes. Not recording,
+        the check alone runs, so the panel stops saying "degraded".
+        """
+        if not self.is_recording or self.session is None:
+            self._check_mic()
+            self._write_state()
+            log.info("audio repaired while not recording; microphone re-checked")
+            return {
+                "accepted": True,
+                "state": self.state.state,
+                "rolled": False,
+                "mic_health": self.state.mic_health,
+            }
+        rolled = self._roll_segment()
+        return {
+            "accepted": True,
+            "state": self.state.state,
+            "rolled": rolled,
+            "segment": self.state.segment,
+            "mic_health": self.state.mic_health,
+        }
+
+    def _roll_segment(self) -> bool:
+        """End the current segment and start the next one, same session.
+
+        The new capturer is started *before* the segment is recorded in
+        ``session.json``, so a capture that cannot restart leaves no empty
+        segment behind: the session is finished with what it has and the user
+        is told, exactly as for a microphone that died.
+        """
+        session = self.session
+        old = self.capturer
+        assert session is not None
+        result: CaptureResult | None = None
+        if old is not None:
+            try:
+                result = old.stop()
+            except (CaptureError, NotImplementedError) as exc:
+                log.error(
+                    "capture stop during the audio-repair roll session=%s error=%s",
+                    getattr(session, "id", None),
+                    exc,
+                )
+        segments = list(getattr(session, "segments", []) or [])
+        if result is not None and segments:
+            segments[-1].stopped_at = result.stopped_at
+            segments[-1].duration_seconds = result.duration_seconds
+            segments[-1].app_source = _describe_app_source(old)
+        self.capturer = None
+        self._save(session)
+
+        index = self._segment_index + 1
+        mic, app = self._targets()
+        try:
+            capturer = self.capturer_factory(mic, app)
+            capturer.start(session, index)
+        except (CaptureError, NotImplementedError) as exc:
+            log.error(
+                "could not restart capture after the audio repair session=%s error=%s",
+                getattr(session, "id", None),
+                exc,
+            )
+            try:
+                self._finish(
+                    auto=True,
+                    reason=f"capture could not restart after the audio repair: {exc}",
+                )
+            except IpcError as finish_exc:
+                log.error(
+                    "could not finish after a failed roll code=%s message=%s",
+                    finish_exc.code,
+                    finish_exc,
+                )
+            return False
+
+        segment = self.spool.add_segment(session, index)
+        self.capturer = capturer
+        self._segment_index = index
+        self._last_health_poll = None
+        self._health_warned = set()
+        self._record_event(session, "audio_repaired", segment=index)
+        self.state.segment = index
+        self.state.started_at = getattr(segment, "started_at", None) or self.clock()
+        self._mic_check_at_segment_start(session, capturer, index)
+        self._write_state()
+        log.info(
+            "segment rolled after an audio repair session=%s segment=%d",
+            getattr(session, "id", None),
+            index,
+        )
+        return True
 
     # --- timers and lifecycle -------------------------------------------
     def tick(self, *, now: datetime | None = None) -> None:
@@ -1116,8 +1350,14 @@ class Daemon:
                 self.state.session_id,
                 detail,
             )
+            # D28: say *why* when it was the ghost device. The verdict lands in
+            # mic_health, which the state write inside _finish publishes.
+            verdict = self._check_mic()
+            reason = f"microphone capture died: {detail}"
+            if verdict.degraded:
+                reason += f" ({verdict.sentence()})"
             try:
-                self._finish(auto=True, reason=f"microphone capture died: {detail}")
+                self._finish(auto=True, reason=reason)
             except IpcError as exc:
                 # Same reasoning as the grace-period auto-stop: nobody is
                 # holding a socket for this, so it is logged, not raised.
@@ -1723,6 +1963,7 @@ class Daemon:
 
     def _write_state(self) -> None:
         self.state.daemon_pid = os.getpid()
+        self.state.audio_repair = self.config.capture.audio_repair
         try:
             self.state.write(self._state_path)
         except Exception as exc:  # noqa: BLE001 - the bar going stale is not fatal

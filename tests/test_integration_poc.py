@@ -28,6 +28,7 @@ from typing import Any
 import pytest
 
 from munin.capture.base import CaptureResult, CaptureTarget, Capturer, segment_filenames
+from munin.capture.health import MicHealth
 from munin.config import Config, DetectionConfig, IdleConfig, NotificationConfig
 from munin.daemon import Daemon
 from munin.spool import Spool
@@ -156,6 +157,8 @@ def wiring(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
         clock=clock,
         socket_path_override=run / "munin" / "rec.sock",
         state_path_override=run / "munin" / "state.json",
+        # D28's health check reads PipeWire; nothing in this file may.
+        mic_probe=lambda: MicHealth(state="ok", label="Synthetic microphone"),
     )
     return daemon, spool, clock, config, home
 

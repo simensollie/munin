@@ -104,6 +104,10 @@ min_free_mb  = 2048
 # machine plays as the meeting track (and says so in a notification, since that
 # can include audio from outside the meeting); "silent" records only you.
 adhoc_app_source = "system-output"
+# What the "Fix audio" action runs when the microphone is degraded (D28): the
+# notification's button and the panel's. A command line, split on whitespace,
+# never run through a shell. "" removes both buttons; the check still runs.
+audio_repair = "munin-audiofix"
 
 [detection]
 enabled = true
@@ -207,6 +211,14 @@ class CaptureConfig:
     # What the app track holds for an ad-hoc start when no call was detected:
     # "system-output" (the machine's whole output mix) or "silent".
     adhoc_app_source: str = "system-output"
+    # The repair the "Fix audio" action runs when the microphone is degraded
+    # (D28). Split on whitespace into an argv; "" disables the action.
+    audio_repair: str = "munin-audiofix"
+
+    @property
+    def audio_repair_argv(self) -> tuple[str, ...]:
+        """``audio_repair`` as an argv, or ``()`` when the action is disabled."""
+        return tuple(self.audio_repair.split())
 
 
 @dataclass(frozen=True)
@@ -313,6 +325,7 @@ _SCALAR_FIELDS: dict[str, dict[str, type]] = {
         "sample_rate": int,
         "min_free_mb": int,
         "adhoc_app_source": str,
+        "audio_repair": str,
     },
     "detection": {
         "enabled": bool,
