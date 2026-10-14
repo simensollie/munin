@@ -81,7 +81,7 @@ Three signals, read from one `pw-dump`. Any one of them makes the microphone
 | Signal | What it looks like | Verified? |
 |---|---|---|
 | S1 `node-error` | The resolved mic node's `info.state` is `"error"` | **Not verified.** WirePlumber logged `running -> error` for the node, but no `pw-dump` was taken while the ghost existed. `audiofix` now snapshots `pw-dump` before every repair (§5.6), so the next occurrence settles this. Until then the check is written against the other two signals and S1 is added when a fixture exists |
-| S2 `profile-off` | A `bluez_card.*` device with `bluez5.profile = "off"` while `api.bluez5.connection = "connected"` | Verified from `pactl list cards` on 2026-10-14: `Active Profile: off`, 0 sinks, 0 sources, connection `connected` |
+| S2 `profile-off` | A `bluez_card.*` device whose **active** profile is `off` while `api.bluez5.connection = "connected"`. The active profile is `info.params.Profile[0].name` in `pw-dump`; the `bluez5.profile` *property* reads `off` on a healthy A2DP headset too and must not be used (the property only stands in when the device carries no `Profile` param) | Verified from `pactl list cards` on 2026-10-14: `Active Profile: off`, 0 sinks, 0 sources, connection `connected`. The property-vs-param distinction was found during implementation against the 14:28 healthy snapshot |
 | S3 `default-sink-missing` | The `default` metadata object's `default.configured.audio.sink` names a node not present in the dump | Verified from `wpctl status` on 2026-10-14: `Default Configured Devices` named `bluez_output.AA_BB_CC_DD_EE_FF.1`, no such sink existed |
 
 S3 is the signal most likely to fire first in practice, because WirePlumber
