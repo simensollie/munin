@@ -51,9 +51,11 @@ import logging
 import os
 import shutil
 import subprocess
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
+from typing import Any
 
 from munin.capture.base import segment_filenames
 from munin.spool import Segment, Session, Spool, StateError, read_session
@@ -521,6 +523,41 @@ def _write_pieces(
     return segments
 
 
+#: ``history[]`` event rows that describe a *segment's* audio rather than the
+#: session's life, and so belong to whichever half that segment's audio went to.
+SEGMENT_EVENTS = frozenset({"mic_degraded", "audio_repaired"})
+
+
+def segment_events_for(part: Part, history: Iterable[Mapping[str, Any]]) -> list[dict]:
+    """The parent's segment-level event rows this half inherits, renumbered.
+
+    A ``mic_degraded`` row says segment *n* of the parent was captured from a
+    microphone that could not deliver audio; the cut moves that audio into a
+    half and renumbers it from 1, and the warning has to travel with the audio
+    or the half's transcript passes a silent segment off as a quiet meeting
+    (D28). A parent segment cut across both halves puts the row in both. Rows
+    without a ``segment``, and rows of any other kind, stay with the parent:
+    the cut itself and every transition are the parent's story, not the
+    halves'. Order is kept as the parent wrote it, and ``at`` is untouched: the
+    event happened when it happened, not when the cut was made.
+    """
+    targets: dict[int, list[int]] = {}
+    for index, piece in enumerate(part.pieces, start=1):
+        targets.setdefault(piece.source_index, []).append(index)
+    rows: list[dict] = []
+    for row in history or ():
+        if not isinstance(row, Mapping) or row.get("event") not in SEGMENT_EVENTS:
+            continue
+        source = row.get("segment")
+        if not isinstance(source, int) or source not in targets:
+            continue
+        for index in targets[source]:
+            copied = dict(row)
+            copied["segment"] = index
+            rows.append(copied)
+    return rows
+
+
 def default_titles(session: Session, parts: tuple[Part, Part]) -> tuple[str, str]:
     """Part 1 keeps the session's title; part 2 is named after its clock time.
 
@@ -624,6 +661,7 @@ def split(
             half.segments = _write_pieces(
                 part, session.directory, half.directory, ffmpeg
             )
+            half.history.extend(segment_events_for(part, session.history))
             half.started_at = part.started_at
             half.stopped_at = part.stopped_at
             half.duration_seconds = part.duration_seconds
