@@ -71,6 +71,10 @@ def test_dry_run_changes_nothing(machine: FakeMachine) -> None:
     )
     assert f"would append to: {machine.bindings_link}" in proc.stdout
     assert "would run: systemctl --user daemon-reload" in proc.stdout
+    assert (
+        f"would run: ln -sfn {REPO_ROOT}/bin/munin-audiofix {machine.bin_dir}/munin-audiofix"
+        in proc.stdout
+    )
 
     assert not (machine.home / ".local").exists()
     assert not machine.plugin_dir.exists()
@@ -99,6 +103,12 @@ def test_install_performs_every_step(machine: FakeMachine) -> None:
         link = machine.bin_dir / script
         assert link.is_symlink()
         assert os.readlink(link) == str(machine.venv / "bin" / script)
+    # D28: the repair script, linked from the repository like the entry points
+    # are linked from the venv.
+    audiofix = machine.bin_dir / "munin-audiofix"
+    assert audiofix.is_symlink()
+    assert os.readlink(audiofix) == str(REPO_ROOT / "bin" / "munin-audiofix")
+    assert os.access(audiofix, os.X_OK)
 
     # 3: plugin copied and validated where it will run
     assert (machine.plugin_dir / "manifest.json").is_file()
@@ -325,7 +335,7 @@ def test_uninstall_reverses_everything_but_the_data(machine: FakeMachine) -> Non
     proc = machine.run("--uninstall")
 
     assert not machine.venv.exists()
-    for script in ("munin", "munin-rec", "munin-work"):
+    for script in ("munin", "munin-rec", "munin-work", "munin-audiofix"):
         assert not (machine.bin_dir / script).exists()
     assert not machine.plugin_dir.exists()
     assert machine.called("omarchy plugin disable local.munin")

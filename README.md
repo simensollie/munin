@@ -74,11 +74,13 @@ Installing on an Omarchy machine (never runs `sudo`; prints what it cannot do):
 ```bash
 ./install.sh --dry-run    # print the plan, touch nothing
 ./install.sh              # venv, plugin, keybind, systemd unit, data root
-munin doctor              # 23 checks; exit 5 if any fail
+munin doctor              # 30 checks; exit 5 if any fail
 ```
 
 Three processes, kept separate on purpose: `munin-rec` captures and never
-transcribes, `munin-work` drains the spool, `munin` is the CLI.
+transcribes, `munin-work` drains the spool, `munin` is the CLI. One script ships
+beside them: `munin-audiofix` repairs a Bluetooth headset left as a ghost device
+by WirePlumber (D28); `munin-audiofix -n` shows what it would do.
 
 ## License
 

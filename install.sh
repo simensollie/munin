@@ -45,6 +45,11 @@ UNIT_NAME="munin.service"
 # must survive the worker dying, being restarted, or being stopped for an
 # afternoon (D20).
 WORKER_UNIT_NAME="munin-work.service"
+# Shell scripts that ship in bin/ rather than as Python entry points. Linked
+# from the repository, like the entry points are linked from the venv, so a
+# `git pull` updates them without the installer. munin-audiofix is the "Fix
+# audio" repair (D28); `munin-`, never `omarchy-` (D12).
+REPO_SCRIPTS=(munin-audiofix)
 # The widget lives in the centre section, immediately right of the weather. It
 # is a state indicator that has to be noticed mid-meeting without being looked
 # for, and the right section is a row of tray icons that is scanned, not
@@ -250,9 +255,9 @@ step_check() {
 }
 
 # ---------------------------------------------------------------------------
-# Step 2: the venv and the three entry points. A venv rather than --user so an
-# uninstall is one directory, and symlinks rather than copies so an editable
-# reinstall does not need the installer run again.
+# Step 2: the venv, the three entry points and the scripts in bin/. A venv
+# rather than --user so an uninstall is one directory, and symlinks rather than
+# copies so an editable reinstall does not need the installer run again.
 # ---------------------------------------------------------------------------
 
 step_venv() {
@@ -274,6 +279,15 @@ step_venv() {
     run ln -sfn "$VENV_DIR/bin/$s" "$BIN_DIR/$s" || fail 2 "could not link $BIN_DIR/$s"
     info "linked $BIN_DIR/$s -> $VENV_DIR/bin/$s"
   done
+  for s in "${REPO_SCRIPTS[@]}"; do
+    run ln -sfn "$REPO_DIR/bin/$s" "$BIN_DIR/$s" || fail 2 "could not link $BIN_DIR/$s"
+    info "linked $BIN_DIR/$s -> $REPO_DIR/bin/$s"
+  done
+  # Not a requirement: Munin records without it. munin-audiofix cannot
+  # reconnect a Bluetooth headset without it, and doctor says so too.
+  if ! have bluetoothctl; then
+    warn "bluetoothctl not found; munin-audiofix needs it (omarchy pkg add bluez-utils)"
+  fi
   case ":$PATH:" in
   *":$BIN_DIR:"*) ;;
   *) warn "$BIN_DIR is not on PATH; the keybind and the plugin call munin by name" ;;
@@ -709,7 +723,7 @@ uninstall_venv() {
   say ""
   say "Removing the entry points and the venv"
   local s
-  for s in munin munin-rec munin-work; do
+  for s in munin munin-rec munin-work "${REPO_SCRIPTS[@]}"; do
     if [[ -L $BIN_DIR/$s || -e $BIN_DIR/$s ]]; then
       run rm -f "$BIN_DIR/$s"
       info "removed $BIN_DIR/$s"
