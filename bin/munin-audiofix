@@ -1,0 +1,287 @@
+#!/usr/bin/env bash
+#
+# munin-audiofix: recover Bluetooth headset audio after a WirePlumber ghost device.
+#
+# Why this exists (D28, spec 2026-10-14-mic-preflight). When a Bluetooth
+# headset's call-mode link (HFP/SCO) flaps while WirePlumber is rebuilding its
+# nodes, WirePlumber's bluez node-creation script can abort half-way (seen with
+# WirePlumber 0.5.17: create-node.lua, nil node). It leaves a *ghost device*:
+# the card at profile "off", a stale microphone node still registered, and a
+# configured default sink naming an output that no longer exists. Every
+# application, the meeting included, falls back to some other output, and a
+# recording made from the stale microphone is silence. Nothing short of
+# restarting WirePlumber rebuilds the device tree, so that is what this does,
+# then reconnects the headset and makes it the default again: five commands in
+# a fixed order with waits between them, which nobody in a failing meeting can
+# be expected to know or type.
+#
+# Munin's daemon offers this as "Fix audio" on the "Microphone not working"
+# notification and in the panel ([capture] audio_repair). When it succeeds and
+# a munin-rec daemon is reachable, it reports `munin event audio-repaired`, so
+# a live recording ends its segment and starts a fresh one against the rebuilt
+# graph rather than trusting a recorder that may have re-linked to whatever
+# became default.
+#
+# Usage:
+#   munin-audiofix              # the connected headset, or the only paired one
+#   munin-audiofix headset      # a paired device by (part of) its name
+#   munin-audiofix AA:BB:CC:DD:EE:FF
+#   munin-audiofix -n [device]  # dry run: say what would happen, change nothing
+#                               # (still writes the read-only snapshot, step 0)
+#
+# Step 0 saves pw-dump, wpctl status, pactl cards, bluetoothctl info and the
+# last 30 min of the WirePlumber journal under
+# ${XDG_CACHE_HOME:-~/.cache}/munin/audiofix/<timestamp>/, keeping the last 10.
+# No dump was taken while the 2026-10-14 ghost existed; the next one is the
+# fixture the unverified signal S1 is waiting for.
+#
+# Never runs sudo, and never captures audio (D20). It touches the user's
+# PipeWire/WirePlumber session and bluetoothctl, nothing else. Restarting the
+# bluetooth service would also drop the mouse and every other device, so that
+# is left to the user.
+
+set -euo pipefail
+
+DRY_RUN=0
+WANT=""
+
+usage() {
+  cat <<'USAGE'
+Usage: munin-audiofix [-n|--dry-run] [device]
+
+  device        a paired Bluetooth address, or a case-insensitive part of the
+                paired name; default: the connected audio device, or the only
+                paired one
+  -n, --dry-run take the snapshot, print every change instead of making it
+USAGE
+}
+
+for arg in "$@"; do
+  case "$arg" in
+  -n | --dry-run) DRY_RUN=1 ;;
+  -h | --help)
+    usage
+    exit 0
+    ;;
+  -*)
+    printf 'munin-audiofix: unknown option: %s\n' "$arg" >&2
+    usage >&2
+    exit 2
+    ;;
+  *) WANT="$arg" ;;
+  esac
+done
+
+say() { printf '%s\n' "$*"; }
+die() {
+  printf 'munin-audiofix: %s\n' "$*" >&2
+  exit 1
+}
+run() {
+  if ((DRY_RUN)); then
+    say "  would run: $*"
+  else
+    "$@"
+  fi
+}
+
+# Every PipeWire tool fails without saying why when XDG_RUNTIME_DIR is unset,
+# which is what a terminal that did not inherit the session looks like.
+if [[ -z ${XDG_RUNTIME_DIR:-} && -d "/run/user/$(id -u)" ]]; then
+  export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+fi
+
+command -v bluetoothctl >/dev/null 2>&1 ||
+  die "bluetoothctl is not installed (omarchy pkg add bluez-utils)"
+
+# ---------------------------------------------------------------- device ----
+
+# "ADDRESS<TAB>Name" for every paired device that advertises the A2DP sink UUID.
+paired_audio_devices() {
+  local mac rest
+  bluetoothctl devices Paired 2>/dev/null | while read -r _ mac rest; do
+    [[ -n ${mac:-} ]] || continue
+    if bluetoothctl info "$mac" 2>/dev/null | grep -q 'UUID: Audio Sink'; then
+      printf '%s\t%s\n' "$mac" "$rest"
+    fi
+  done
+}
+
+is_connected() { bluetoothctl info "$1" 2>/dev/null | grep -q 'Connected: yes'; }
+
+# Prints the chosen "ADDRESS<TAB>Name". Returns 1 with nothing printed when no
+# device matches, and 3 after listing the candidates when the choice is
+# ambiguous: the caller decides what to do, after the snapshot is taken.
+resolve_device() {
+  local candidates
+  candidates="$(paired_audio_devices)"
+  [[ -n $candidates ]] || return 1
+
+  if [[ -n $WANT ]]; then
+    local hit
+    if [[ $WANT =~ ^([0-9A-Fa-f]{2}:){5}[0-9A-Fa-f]{2}$ ]]; then
+      hit="$({ grep -i "^${WANT}"$'\t' <<<"$candidates" || true; } | head -1)"
+    else
+      hit="$({ grep -iF -- "$WANT" <<<"$candidates" || true; } | head -1)"
+    fi
+    [[ -n $hit ]] || return 1
+    printf '%s\n' "$hit"
+    return 0
+  fi
+
+  # No argument: prefer whatever is connected now, else the only candidate.
+  local connected="" mac name
+  while IFS=$'\t' read -r mac name; do
+    if is_connected "$mac"; then connected+="$mac"$'\t'"$name"$'\n'; fi
+  done <<<"$candidates"
+  if [[ -n $connected ]]; then
+    printf '%s' "$connected" | head -1
+  elif [[ $(wc -l <<<"$candidates") -eq 1 ]]; then
+    printf '%s\n' "$candidates"
+  else
+    say "Several paired audio devices, none connected. Pick one:" >&2
+    while IFS=$'\t' read -r mac name; do
+      say "  munin-audiofix \"$name\"   ($mac)" >&2
+    done <<<"$candidates"
+    return 3
+  fi
+}
+
+resolve_rc=0
+line="$(resolve_device)" || resolve_rc=$?
+MAC=""
+NAME=""
+if ((resolve_rc == 0)) && [[ -n $line ]]; then
+  MAC="${line%%$'\t'*}"
+  NAME="${line#*$'\t'}"
+fi
+
+# ---------------------------------------------------------------- snapshot ----
+#
+# The broken state, saved before anything touches it. Read-only, so it runs in
+# a dry run too, and before an unknown device is reported: the snapshot is
+# worth having either way.
+
+SNAP_ROOT="${XDG_CACHE_HOME:-$HOME/.cache}/munin/audiofix"
+SNAP="$SNAP_ROOT/$(date +%Y%m%dT%H%M%S)"
+mkdir -p "$SNAP"
+say "0. Snapshot of the current state -> $SNAP"
+pw-dump >"$SNAP/pw-dump.json" 2>/dev/null || say "   (pw-dump failed, skipped)"
+wpctl status >"$SNAP/wpctl-status.txt" 2>&1 || true
+pactl list cards >"$SNAP/pactl-cards.txt" 2>&1 || true
+if [[ -n $MAC ]]; then
+  bluetoothctl info "$MAC" >"$SNAP/bluetoothctl-info.txt" 2>&1 || true
+fi
+journalctl --user -u wireplumber --since '-30min' --no-pager -o short-iso \
+  >"$SNAP/wireplumber.log" 2>&1 || true
+# Newest first; everything past the tenth goes.
+find "$SNAP_ROOT" -mindepth 1 -maxdepth 1 -type d -printf '%f\n' 2>/dev/null |
+  sort -r | tail -n +11 | while read -r old; do rm -rf "${SNAP_ROOT:?}/$old"; done
+
+case "$resolve_rc" in
+0) [[ -n $MAC ]] || die "no paired audio device matches '$WANT'" ;;
+3) exit 1 ;;
+*)
+  if [[ -n $WANT ]]; then
+    die "no paired audio device matches '$WANT'"
+  fi
+  die "no paired Bluetooth audio devices"
+  ;;
+esac
+
+MAC_U="${MAC//:/_}"
+say "Target: $NAME ($MAC)"
+
+wait_for() { # wait_for <seconds> <description> <command...>
+  local secs="$1" what="$2"
+  shift 2
+  local i
+  for ((i = 0; i < secs * 5; i++)); do
+    if "$@" >/dev/null 2>&1; then return 0; fi
+    sleep 0.2
+  done
+  die "timed out waiting for $what"
+}
+
+has_card() { pactl list cards short 2>/dev/null | grep -q "bluez_card.${MAC_U}"; }
+headset_sink() {
+  pactl list sinks short 2>/dev/null | awk '{print $2}' |
+    grep -m1 -E "^bluez_output\.${MAC_U}(\.|$)"
+}
+headset_source() {
+  pactl list sources short 2>/dev/null | awk '{print $2}' |
+    grep -m1 -E "^bluez_input\.(${MAC}|${MAC_U})(\.|$)"
+}
+
+# ------------------------------------------------------------- wireplumber ----
+
+say "1. Restarting WirePlumber (rebuilds the device tree, clears the ghost)"
+run systemctl --user restart wireplumber
+((DRY_RUN)) || wait_for 10 "WirePlumber" wpctl status
+
+# --------------------------------------------------------------- bluetooth ----
+
+say "2. Reconnecting $NAME"
+if is_connected "$MAC"; then
+  run bluetoothctl disconnect "$MAC"
+  ((DRY_RUN)) || sleep 1
+fi
+run bluetoothctl connect "$MAC"
+((DRY_RUN)) || wait_for 15 "the PipeWire card for $NAME" has_card
+
+# ---------------------------------------------------------------- defaults ----
+
+say "3. Making it the default output (and input, when the headset has one)"
+SINK="bluez_output.${MAC_U}.1"
+if ! ((DRY_RUN)); then
+  wait_for 10 "a sink for $NAME" headset_sink
+  SINK="$(headset_sink)"
+fi
+run pactl set-default-sink "$SINK"
+if ((DRY_RUN)); then
+  SOURCE="bluez_input.${MAC}"
+else
+  SOURCE="$(headset_source || true)"
+fi
+if [[ -n $SOURCE ]]; then
+  run pactl set-default-source "$SOURCE"
+fi
+run wpctl set-mute @DEFAULT_AUDIO_SINK@ 0
+if ((DRY_RUN)); then
+  say "  would raise the volume to 50 % if it is at 0"
+else
+  vol="$(wpctl get-volume @DEFAULT_AUDIO_SINK@ 2>/dev/null | awk '{print $2}')"
+  if [[ ${vol:-0} == "0.00" || ${vol:-0} == "0" ]]; then
+    say "   volume was 0, setting 50 %"
+    wpctl set-volume @DEFAULT_AUDIO_SINK@ 0.5
+  fi
+fi
+
+# ------------------------------------------------------------------ report ----
+
+say "4. Result"
+if ((DRY_RUN)); then
+  say "  (dry run, nothing changed)"
+  say "  would run: munin event audio-repaired (if munin-rec is running)"
+  exit 0
+fi
+
+wpctl status 2>/dev/null | sed -n '/Sinks:/,/Sources:/p' | grep -E 'Sinks|\*' || true
+wpctl status 2>/dev/null | grep -A2 'Default Configured' || true
+
+current="$(pactl get-default-sink 2>/dev/null || true)"
+if [[ $current != "$SINK" ]]; then
+  die "the default sink is '${current:-none}', not $SINK; the repair did not take"
+fi
+say "  $SINK is the default sink"
+
+# ------------------------------------------------------------------- munin ----
+#
+# Tell a running recorder, so it rolls the live segment (spec section 5.3). A
+# daemon that is not running has nothing to roll, which is not a failure.
+
+if command -v munin >/dev/null 2>&1 && munin status >/dev/null 2>&1; then
+  say "5. Telling munin-rec the audio was repaired"
+  munin event audio-repaired || say "   (munin event audio-repaired failed; the repair stands)"
+fi
+exit 0
