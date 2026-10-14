@@ -807,3 +807,65 @@ def test_a_cut_that_fails_halfway_leaves_the_parent_queued(
     assert parent.split_into is None
     assert spool.inbox_ids() == [session.id]
     assert [s.id for s in spool.iter_sessions()] == [session.id]
+
+
+# --- the microphone warning travels with the audio (D28) ----------------
+
+
+def test_a_plan_carries_segment_events_to_the_half_that_holds_the_audio(
+    spool: Spool, two_track: Callable[..., tuple[Path, Path]]
+) -> None:
+    from munin.split import segment_events_for
+
+    session = _captured_session(spool, two_track, segments=2, seconds=4.0)
+    session.record_event("mic_degraded", segment=1, reason="default-sink-missing", label="Headset")
+    session.record_event("audio_repaired", segment=2)
+    first, second = plan(session, 5.0)  # all of segment 1 + 1 s of segment 2 | 3 s of segment 2
+
+    one = segment_events_for(first, session.history)
+    two = segment_events_for(second, session.history)
+    assert [(r["event"], r["segment"]) for r in one] == [("mic_degraded", 1), ("audio_repaired", 2)]
+    # Segment 2 was cut across both halves, so its row lands in both, as 1 there.
+    assert [(r["event"], r["segment"]) for r in two] == [("audio_repaired", 1)]
+    # Transitions and the parent's own rows never travel.
+    assert all("event" in r for r in one + two)
+    # ``at`` is the event's time, not the cut's.
+    assert one[0]["at"] == session.history[-2]["at"]
+
+
+@pytest.mark.skipif(FFMPEG is None, reason="the cut needs ffmpeg")
+def test_a_split_keeps_the_microphone_warning_on_the_right_half(
+    spool: Spool, two_track: Callable[..., tuple[Path, Path]]
+) -> None:
+    """Offline splitting must not launder a degraded segment into a clean one.
+
+    The worker reads only the half's own ``history[]`` when it writes the
+    transcript, so the warning has to be in there, renumbered to the half's
+    segment, or a transcript of silence goes out looking like a quiet meeting.
+    """
+    from munin.pipeline.render import mic_degraded_lines
+
+    session = _captured_session(spool, two_track, segments=2, seconds=4.0, gap_minutes=5)
+    session.record_event(
+        "mic_degraded", segment=2, reason="default-sink-missing", label="Headset"
+    )
+
+    first, second = split(session, spool=spool, at_seconds=4.0)  # on the boundary
+
+    first_on_disk = read_session(first.directory)
+    second_on_disk = read_session(second.directory)
+    assert [r for r in first_on_disk.history if r.get("event") == "mic_degraded"] == []
+    rows = [r for r in second_on_disk.history if r.get("event") == "mic_degraded"]
+    assert len(rows) == 1
+    assert rows[0]["segment"] == 1, "renumbered to the half's own segment"
+    assert rows[0]["reason"] == "default-sink-missing"
+    assert rows[0]["label"] == "Headset"
+    assert mic_degraded_lines(first_on_disk.history) == []
+    lines = mic_degraded_lines(second_on_disk.history)
+    assert len(lines) == 1 and "segment 1" in lines[0]
+    # The halves' first row is still their own birth; the warning comes after it.
+    assert second_on_disk.history[0]["to"] == "captured"
+    # And the parent keeps its row, unrenumbered.
+    parent = read_session(session.directory)
+    kept = [r for r in parent.history if r.get("event") == "mic_degraded"]
+    assert kept and kept[0]["segment"] == 2
