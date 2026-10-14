@@ -706,6 +706,17 @@ test("a discarded session reads as settled, not as a failure (D27)", () => {
   assert.equal(M.GLYPH_DISCARDED.codePointAt(0), 0xf01b4); // md-delete, solid bin
   assert.notEqual(M.sessionGlyph(rows[0].state), M.sessionGlyph("failed"));
   assert.match(M.sessionMeta(rows[0]), /discarded, audio deleted/);
+  assert.deepEqual(rows[0].audio_remaining, []);
+});
+
+test("a discard that left audio on disk does not claim it is gone (D27)", () => {
+  const rows = M.parseSessions(
+    JSON.stringify({ sessions: [{ id: "s1", state: "discarded", title: "Quality sync",
+      audio_remaining: ["mic.opus"] }] }),
+  );
+  assert.deepEqual(rows[0].audio_remaining, ["mic.opus"]);
+  assert.match(M.sessionMeta(rows[0]), /discarded, audio partly deleted \(mic\.opus kept\)/);
+  assert.doesNotMatch(M.sessionMeta(rows[0]), /discarded, audio deleted/);
 });
 
 // ------------------------------------------------------- microphone (D28)

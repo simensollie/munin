@@ -625,7 +625,10 @@ function parseSessions(text) {
             started_at: stringOrNull(s.started_at),
             duration_seconds: numberOr(s.duration_seconds, 0),
             path: stringOrNull(s.path),
-            pending_reason: stringOrNull(s.pending_reason)
+            pending_reason: stringOrNull(s.pending_reason),
+            // Tracks a discard left on disk (D27); empty for every other state.
+            audio_remaining: Array.isArray(s.audio_remaining)
+                ? s.audio_remaining.map(function (n) { return String(n); }) : []
         });
     }
     return out;
@@ -661,8 +664,18 @@ function sessionMeta(session) {
     if (session.pending_reason) parts.push(session.pending_reason);
     else if (session.state === "failed") parts.push("audio kept");
     else if (session.state === "split") parts.push("split in two");
-    else if (session.state === "discarded") parts.push("discarded, audio deleted");
+    else if (session.state === "discarded") parts.push(discardedMeta(session));
     return parts.join(" · ");
+}
+
+// What a discarded row says about its audio. The daemon deletes every track
+// it can and reports the ones still on disk as `audio_remaining`. A row that
+// said "audio deleted" over a session whose audio is still there would be the
+// one claim a discard must never make (D27).
+function discardedMeta(session) {
+    var left = session && Array.isArray(session.audio_remaining) ? session.audio_remaining : [];
+    if (left.length > 0) return "discarded, audio partly deleted (" + left.join(", ") + " kept)";
+    return "discarded, audio deleted";
 }
 
 // ---------------------------------------------------------------- detection

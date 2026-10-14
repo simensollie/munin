@@ -267,6 +267,16 @@ def _cmd_discard(args: argparse.Namespace) -> int:
     from munin import ipc
 
     data = ipc.call("discard")
+    remaining = [str(name) for name in (data.get("remaining") or [])]
+    if remaining:
+        # The record is discarded either way; the audio is not gone, and
+        # saying it is would be the one lie a discard must not tell (D27).
+        print(
+            f"discarded: {data.get('session_id')} "
+            f"{_clock(data.get('duration_seconds'))} (audio partly deleted, record kept)"
+        )
+        print(f"still on disk: {', '.join(remaining)} in {data.get('session')}")
+        return EXIT_OK
     print(
         f"discarded: {data.get('session_id')} "
         f"{_clock(data.get('duration_seconds'))} (audio deleted, record kept)"
@@ -354,6 +364,9 @@ def _cmd_list(args: argparse.Namespace) -> int:
         )
         if session.get("pending_reason"):
             line += f"  ({session['pending_reason']})"
+        remaining = session.get("audio_remaining") or []
+        if remaining:
+            line += f"  (audio partly deleted: {', '.join(str(n) for n in remaining)})"
         print(line)
     return EXIT_OK
 
