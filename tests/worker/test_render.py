@@ -11,6 +11,7 @@ from munin.pipeline.render import (
     adjust_segments,
     format_timestamp,
     gap_line,
+    mic_degraded_lines,
     render_transcript,
 )
 
@@ -157,3 +158,31 @@ def test_render_transcript_two_segment_concatenation_with_gap_marker() -> None:
         "[00:00:10 - 00:00:16] Ola Nordmann: Andre del.",
     ]
 
+
+
+# ---------------------------------------------------------------------------
+# mic_degraded_lines (D28)
+
+
+def test_mic_degraded_lines_reads_only_the_event_rows() -> None:
+    history = [
+        {"at": "2026-10-14T13:01:00+02:00", "from": "created", "to": "recording", "by": "munin-rec"},
+        {"event": "mic_degraded", "at": "2026-10-14T13:01:01+02:00", "segment": 1,
+         "reason": "default-sink-missing", "label": "Headset"},
+        {"event": "audio_repaired", "at": "2026-10-14T13:05:00+02:00", "segment": 2},
+        {"event": "mic_degraded", "at": "2026-10-14T13:20:00+02:00", "segment": 3,
+         "reason": "profile-off", "label": "Headset"},
+        {"event": "mic_degraded", "at": "2026-10-14T13:20:01+02:00", "segment": 3,
+         "reason": "profile-off", "label": "Headset"},
+    ]
+    assert mic_degraded_lines(history) == [
+        "[microphone degraded for segment 1: set as default but no longer exists]",
+        "[microphone degraded for segment 3: connected but has no audio profile]",
+    ]
+
+
+def test_mic_degraded_lines_is_empty_for_a_healthy_session() -> None:
+    assert mic_degraded_lines([]) == []
+    assert mic_degraded_lines(
+        [{"at": "x", "from": "recording", "to": "captured", "by": "munin-rec"}]
+    ) == []

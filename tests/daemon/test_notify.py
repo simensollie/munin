@@ -112,6 +112,31 @@ def test_disabled_notifications_send_nothing() -> None:
     assert sent == []
 
 
+def test_mic_degraded_is_the_contract_row() -> None:
+    note = notify.mic_degraded(
+        "Headset", "connected but has no audio profile", ("munin-audiofix",),
+        session_id="2026-10-14T1301-weekly-sync",
+    )
+    assert note.title == "Microphone not working"
+    assert note.body == (
+        "Headset is connected but has no audio profile. Recording will have no "
+        "mic audio. Click to fix audio."
+    )
+    assert note.urgency == "critical"
+    argv = notify.build_argv(note)
+    assert argv[-2:] == ["--exec", "munin-audiofix"]
+    # Replaces itself, never the session's other notifications.
+    assert note.replaces_id != notify.replace_id_for("2026-10-14T1301-weekly-sync")
+    again = notify.mic_degraded("Headset", "x", ("munin-audiofix",),
+                                session_id="2026-10-14T1301-weekly-sync")
+    assert again.replaces_id == note.replaces_id
+
+
+def test_mic_degraded_before_a_session_still_has_a_stable_id() -> None:
+    note = notify.mic_degraded("Headset", "x", ("munin-audiofix",))
+    assert note.replaces_id is not None
+
+
 def test_a_missing_wrapper_is_a_log_line_not_a_crash(monkeypatch) -> None:
     monkeypatch.setattr(notify.shutil, "which", lambda name: None)
     assert notify.send(notify.auto_stopped(2)) is False

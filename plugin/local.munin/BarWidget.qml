@@ -112,6 +112,16 @@ Panel {
         Quickshell.execDetached(Model.muninArgv(["xdg-open", String(path)]));
     }
 
+    // D28: the repair, offered where the warning is. It starts a script, like
+    // every other action here starts `munin`; the plugin still never captures.
+    readonly property var fixAudio: Model.fixAudioAction(root.status)
+
+    function runFixAudio() {
+        if (!root.fixAudio) return;
+        root.run(root.fixAudio.argv);
+        root.close();
+    }
+
     function runPrimary() {
         root.run(Model.primaryActionFor(root.status, root.nowMs).argv);
         root.close();
@@ -465,6 +475,7 @@ Panel {
                         id: sessionBlock
                         visible: root.status.session_id !== null
                             || root.status.detected_app !== null
+                            || Model.micDegraded(root.status)
                         width: parent.width
                         spacing: Style.spacing.labelGap
 
@@ -496,6 +507,14 @@ Panel {
                             visible: root.graceClock !== ""
                             label: "Stops at"
                             value: root.graceClock
+                        }
+                        InfoPair {
+                            // D28: said while the user can still fix it, not
+                            // discovered in a silent transcript afterwards.
+                            visible: Model.micDegraded(root.status)
+                            label: "Microphone"
+                            value: Model.micReasonText(root.status)
+                            wrap: true
                         }
                         InfoPair {
                             visible: root.status.last_error !== null
@@ -537,6 +556,15 @@ Panel {
                                 fontFamily: root.fontFamily
                                 onClicked: root.runSecondary()
                             }
+                        }
+
+                        Button {
+                            visible: root.fixAudio !== null
+                            text: root.fixAudio ? root.fixAudio.label : ""
+                            bordered: true
+                            foreground: root.urgent
+                            fontFamily: root.fontFamily
+                            onClicked: root.runFixAudio()
                         }
 
                         Button {

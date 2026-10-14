@@ -413,3 +413,66 @@ def test_m365_without_a_keyring_tool_warns_rather_than_fails(installed: FakeMach
     )
     assert checks["m365"].status == "warn"
     assert "secret-tool" in checks["m365"].detail
+
+
+# -- microphone health (D28) -----------------------------------------------------
+
+PW_FIXTURES = Path(__file__).resolve().parents[1] / "fixtures" / "pw-dump"
+
+
+def _with_dump(machine: FakeMachine, name: str) -> dict[str, CheckResult]:
+    machine.env["SHIM_PW_DUMP"] = str(PW_FIXTURES / f"{name}.json")
+    return _run(machine)
+
+
+def test_a_synthetic_machine_without_bluetooth_is_ok_or_skip(installed: FakeMachine) -> None:
+    checks = _run(installed)
+    # No configured default sink in the synthetic dump: worth a word, no more.
+    assert checks["default sink"].status == "warn"
+    assert checks["mic health"].status == "ok"
+    assert checks["bluetooth profile"].status == "skip"
+    assert checks["bluetoothctl"].status in ("ok", "warn")
+
+
+def test_a_healthy_headset_passes_all_three(installed: FakeMachine) -> None:
+    checks = _with_dump(installed, "healthy-bluetooth")
+    assert checks["default sink"].status == "ok"
+    assert "bluez_output.AA_BB_CC_DD_EE_FF.1" in checks["default sink"].detail
+    assert checks["mic health"].status == "ok"
+    assert checks["mic health"].detail == "Headset"
+    assert checks["bluetooth profile"].status == "ok"
+    assert "Headset: a2dp-sink (connected)" in checks["bluetooth profile"].detail
+
+
+def test_a_missing_default_sink_is_named(installed: FakeMachine) -> None:
+    checks = _with_dump(installed, "ghost-s3")
+    assert checks["default sink"].status == "fail"
+    assert "no longer exists" in checks["default sink"].detail
+    assert "munin-audiofix" in checks["default sink"].detail
+    assert checks["mic health"].status == "fail"
+    assert "default-sink-missing" in checks["mic health"].detail
+    assert checks["bluetooth profile"].status == "ok"
+
+
+def test_a_card_at_profile_off_is_named(installed: FakeMachine) -> None:
+    checks = _with_dump(installed, "ghost-s2")
+    assert checks["bluetooth profile"].status == "fail"
+    assert "Headset connected with no audio profile" in checks["bluetooth profile"].detail
+    assert checks["mic health"].status == "fail"
+    assert "profile-off" in checks["mic health"].detail
+
+
+def test_mic_checks_without_pipewire_do_not_raise(machine: FakeMachine) -> None:
+    machine.env["XDG_RUNTIME_DIR"] = ""
+    checks = _run(machine)
+    assert checks["default sink"].status == "fail"
+    assert checks["mic health"].status == "warn"
+    assert checks["mic health"].detail.startswith("unknown")
+    assert checks["bluetooth profile"].status == "warn"
+
+
+def test_bluetoothctl_missing_is_a_warning(installed: FakeMachine) -> None:
+    installed.env["PATH"] = str(installed.home / "no-such-bin")
+    checks = _run(installed)
+    assert checks["bluetoothctl"].status == "warn"
+    assert "munin-audiofix" in checks["bluetoothctl"].detail

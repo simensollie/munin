@@ -48,6 +48,7 @@ window title is never re-tokenized by a shell:
 | Panel primary button, bar middle-click | `munin start [--from-detection\|--resume]` / `munin stop` |
 | Panel secondary button while recording | `munin split --now` — one recording holding two meetings is cut here (D26, spec §6.4) |
 | Panel *Discard* button, or `d`, pressed twice | `munin discard` — stops the recording and deletes its audio; the record stays (D27, spec §6.3) |
+| Panel *Fix audio* button, shown only while `state.json`'s `mic_health.state` is `degraded` and `audio_repair` is not empty | the configured `audio_repair` argv, `munin-audiofix` by default (D28). It reports back with `munin event audio-repaired` itself |
 | Bar right-click | `munin toggle` |
 | Panel opens | `munin list --json --limit 5` |
 | Panel folder rows | `xdg-open` on `$MUNIN_HOME` or a session directory |

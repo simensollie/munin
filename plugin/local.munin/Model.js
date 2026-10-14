@@ -106,6 +106,12 @@ function emptyState() {
         // D15's window, so Resume can say how long it still means "the same
         // meeting". null when the daemon predates the field.
         resume_window_seconds: null,
+        // The daemon's last microphone health check (D28): {state, reason,
+        // label, checked_at}, or null before the first one or from a daemon
+        // that predates the field.
+        mic_health: null,
+        // `[capture] audio_repair`: what *Fix audio* runs. "" disables it.
+        audio_repair: "",
         updated_at: null,
         daemon_pid: 0,
         // Not part of the daemon's contract: set by parseState so the widget
@@ -149,9 +155,62 @@ function parseState(text) {
     view.resume_window_seconds = raw.resume_window_seconds === null
         || raw.resume_window_seconds === undefined
         ? null : Math.max(0, numberOr(raw.resume_window_seconds, 0));
+    view.mic_health = parseMicHealth(raw.mic_health);
+    view.audio_repair = typeof raw.audio_repair === "string" ? raw.audio_repair : "";
     view.updated_at = stringOrNull(raw.updated_at);
     view.daemon_pid = numberOr(raw.daemon_pid, 0);
     return view;
+}
+
+// ------------------------------------------------------- microphone (D28)
+
+// The reason strings of spec 2026-10-14 section 5.3, keyed by signal. Kept in
+// step with munin.capture.health.REASON_TEXT; the test pins both.
+var MIC_REASON_TEXT = {
+    "node-error": "in an error state",
+    "profile-off": "connected but has no audio profile",
+    "default-sink-missing": "set as default but no longer exists"
+};
+
+var MIC_HEALTH_STATES = ["ok", "degraded", "unknown"];
+
+function parseMicHealth(raw) {
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+    var state = String(raw.state || "");
+    if (MIC_HEALTH_STATES.indexOf(state) === -1) return null;
+    return {
+        state: state,
+        reason: stringOrNull(raw.reason),
+        label: stringOrNull(raw.label),
+        checked_at: stringOrNull(raw.checked_at)
+    };
+}
+
+// Whether the panel says anything about the microphone at all: only when the
+// last check found it degraded. Absent, ok and unknown say nothing.
+function micDegraded(view) {
+    return !!(view && view.mic_health && view.mic_health.state === "degraded");
+}
+
+// "Headset is connected but has no audio profile", or "" when not degraded.
+function micReasonText(view) {
+    if (!micDegraded(view)) return "";
+    var reason = view.mic_health.reason;
+    var text = reason && MIC_REASON_TEXT[reason] ? MIC_REASON_TEXT[reason]
+        : (reason || "not working");
+    return (view.mic_health.label || "The microphone") + " is " + text;
+}
+
+// *Fix audio*: the configured repair, split on whitespace the way the daemon
+// splits it, never through a shell. null when the mic is fine or the user
+// turned the action off with `audio_repair = ""`.
+function fixAudioAction(view) {
+    if (!micDegraded(view)) return null;
+    var argv = String(view.audio_repair || "").split(/\s+/).filter(function (part) {
+        return part !== "";
+    });
+    if (argv.length === 0) return null;
+    return { label: "Fix audio", argv: argv };
 }
 
 // The daemon's [[detection.apps]] table, as published in state.json. Every

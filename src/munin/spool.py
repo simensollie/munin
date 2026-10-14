@@ -542,6 +542,29 @@ class Session:
             self.history.append(entry)
             self.save()
 
+    def record_event(self, event: str, *, at: datetime | None = None, **fields) -> dict:
+        """Append an event row to ``history[]`` without changing state.
+
+        ``history[]`` is the audit trail (spec 12), and not everything worth
+        auditing is a transition: a segment captured from a microphone that
+        could not deliver audio, or a repair that rolled the segment (D28), is
+        a fact about the record a reviewer has to be able to see. Rows of this
+        kind carry ``event`` instead of ``from``/``to``/``by``; every reader
+        that walks ``history[]`` looking for transitions skips them by that.
+
+        Re-reads ``history[]`` from disk under the lock first, exactly as
+        :meth:`transition` does, so a row the other process wrote meanwhile is
+        never rolled back.
+        """
+        with self.lock():
+            if self.json_path.exists():
+                self.history = read_session(self.directory).history
+            entry: dict = {"event": event, "at": to_iso(at or now_local())}
+            entry.update(fields)
+            self.history.append(entry)
+            self.save()
+        return entry
+
 
 def read_session(directory: Path) -> Session:
     """Load one ``session.json`` from a directory."""

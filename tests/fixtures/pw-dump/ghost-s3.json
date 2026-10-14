@@ -1,0 +1,201 @@
+[
+  {
+    "id": 138,
+    "type": "PipeWire:Interface:Metadata",
+    "version": 3,
+    "permissions": [
+      "r",
+      "w",
+      "x"
+    ],
+    "props": {
+      "metadata.name": "default",
+      "object.serial": 206081
+    },
+    "metadata": [
+      {
+        "subject": 0,
+        "key": "default.configured.audio.sink",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "bluez_output.AA_BB_CC_DD_EE_FF.1"
+        }
+      },
+      {
+        "subject": 0,
+        "key": "default.configured.audio.source",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "bluez_input.AA:BB:CC:DD:EE:FF"
+        }
+      },
+      {
+        "subject": 0,
+        "key": "default.audio.sink",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "bluez_output.AA_BB_CC_DD_EE_FF.1"
+        }
+      },
+      {
+        "subject": 0,
+        "key": "default.audio.source",
+        "type": "Spa:String:JSON",
+        "value": {
+          "name": "bluez_input.AA:BB:CC:DD:EE:FF"
+        }
+      }
+    ]
+  },
+  {
+    "id": 192,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "media.class": "Audio/Source",
+        "node.name": "alsa_input.usb-Generic_USB_Microphone-00.mono-fallback",
+        "node.description": "USB Microphone Mono",
+        "node.nick": "USB Microphone",
+        "object.serial": 206099,
+        "object.id": 192,
+        "device.id": 140,
+        "device.api": "alsa"
+      }
+    }
+  },
+  {
+    "id": 47,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "media.class": "Audio/Sink",
+        "node.name": "alsa_output.pci-0000_00_1f.3.analog-stereo",
+        "node.description": "Built-in Audio Analog Stereo",
+        "node.nick": "ALC897 Analog",
+        "object.serial": 206100,
+        "object.id": 47,
+        "device.id": 41,
+        "device.api": "alsa"
+      }
+    }
+  },
+  {
+    "id": 155,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "media.class": "Audio/Source",
+        "node.name": "alsa_input.pci-0000_00_1f.3.analog-stereo",
+        "node.description": "Built-in Audio Analog Stereo",
+        "node.nick": "ALC897 Analog",
+        "object.serial": 206101,
+        "object.id": 155,
+        "device.id": 41,
+        "device.api": "alsa"
+      }
+    }
+  },
+  {
+    "id": 74,
+    "type": "PipeWire:Interface:Device",
+    "version": 3,
+    "info": {
+      "props": {
+        "api.bluez5.address": "AA:BB:CC:DD:EE:FF",
+        "api.bluez5.connection": "connected",
+        "api.bluez5.path": "/org/bluez/hci0/dev_AA_BB_CC_DD_EE_FF",
+        "bluez5.profile": "off",
+        "device.alias": "Headset",
+        "device.api": "bluez5",
+        "device.bus": "bluetooth",
+        "device.description": "Headset",
+        "device.form-factor": "headset",
+        "device.name": "bluez_card.AA_BB_CC_DD_EE_FF",
+        "media.class": "Audio/Device",
+        "object.id": 74,
+        "object.serial": 206349
+      },
+      "params": {
+        "EnumProfile": [
+          {
+            "index": 0,
+            "name": "off",
+            "description": "Off",
+            "available": "yes",
+            "priority": 0
+          },
+          {
+            "index": 131073,
+            "name": "a2dp-sink-sbc",
+            "description": "High Fidelity Playback (A2DP Sink, codec SBC)",
+            "available": "yes",
+            "priority": 132
+          },
+          {
+            "index": 131074,
+            "name": "a2dp-sink-sbc_xq",
+            "description": "High Fidelity Playback (A2DP Sink, codec SBC-XQ)",
+            "available": "yes",
+            "priority": 131
+          },
+          {
+            "index": 131076,
+            "name": "a2dp-sink",
+            "description": "High Fidelity Playback (A2DP Sink, codec AAC)",
+            "available": "yes",
+            "priority": 133
+          },
+          {
+            "index": 196864,
+            "name": "headset-head-unit-cvsd",
+            "description": "Headset Head Unit (HSP/HFP, codec CVSD)",
+            "available": "yes",
+            "priority": 5
+          },
+          {
+            "index": 196865,
+            "name": "headset-head-unit",
+            "description": "Headset Head Unit (HSP/HFP, codec MSBC)",
+            "available": "yes",
+            "priority": 6
+          }
+        ],
+        "Profile": [
+          {
+            "index": 131076,
+            "name": "a2dp-sink",
+            "description": "High Fidelity Playback (A2DP Sink, codec AAC)",
+            "available": "yes",
+            "priority": 133
+          }
+        ]
+      }
+    }
+  },
+  {
+    "id": 175,
+    "type": "PipeWire:Interface:Node",
+    "version": 3,
+    "info": {
+      "state": "suspended",
+      "error": null,
+      "props": {
+        "media.class": "Audio/Source",
+        "node.name": "bluez_input.AA:BB:CC:DD:EE:FF",
+        "node.description": "Headset",
+        "object.serial": 206351,
+        "object.id": 175,
+        "device.id": 74
+      }
+    }
+  }
+]

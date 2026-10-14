@@ -194,6 +194,7 @@ def test_unknown_keys_are_reported_not_dropped(munin_home: Path) -> None:
         ("[detection]\nwarn_seconds = 300\n", "inside grace_seconds"),
         ("[capture]\nsample_rate = 0\n", "must be positive"),
         ('[capture]\nadhoc_app_source = "everything"\n', "adhoc_app_source must be one of"),
+        ("[capture]\naudio_repair = false\n", "string"),
         ('[transcribe]\nfallback = "ssh"\n', "list of backend names"),
         ('[export]\nformat = "flac"\n', "format must be one of"),
         ('[export]\nenabled = "yes"\n', "true or false"),
@@ -302,3 +303,25 @@ def test_adhoc_app_source_defaults_to_the_output_mix(munin_home: Path) -> None:
     assert load().capture.adhoc_app_source == "system-output"
     write(munin_home, '[capture]\nadhoc_app_source = "silent"\n')
     assert load().capture.adhoc_app_source == "silent"
+
+
+def test_audio_repair_defaults_to_the_shipped_script(munin_home: Path) -> None:
+    # D28: the Fix audio action. A command line, split on whitespace, never a
+    # shell; "" removes the action.
+    write(munin_home, "")
+    capture = load().capture
+    assert capture.audio_repair == "munin-audiofix"
+    assert capture.audio_repair_argv == ("munin-audiofix",)
+    write(munin_home, '[capture]\naudio_repair = "munin-audiofix  -n headset"\n')
+    assert load().capture.audio_repair_argv == ("munin-audiofix", "-n", "headset")
+    write(munin_home, '[capture]\naudio_repair = ""\n')
+    capture = load().capture
+    assert capture.audio_repair == ""
+    assert capture.audio_repair_argv == ()
+    assert "capture.audio_repair" not in load().unknown_keys
+
+
+def test_the_template_carries_audio_repair() -> None:
+    from munin.config import DEFAULT_CONFIG_TOML
+
+    assert 'audio_repair = "munin-audiofix"' in DEFAULT_CONFIG_TOML

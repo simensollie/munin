@@ -707,3 +707,59 @@ test("a discarded session reads as settled, not as a failure (D27)", () => {
   assert.notEqual(M.sessionGlyph(rows[0].state), M.sessionGlyph("failed"));
   assert.match(M.sessionMeta(rows[0]), /discarded, audio deleted/);
 });
+
+// ------------------------------------------------------- microphone (D28)
+
+const DEGRADED = {
+  state: "degraded",
+  reason: "profile-off",
+  label: "Headset",
+  checked_at: "2026-10-14T13:01:23+02:00",
+};
+
+test("a degraded microphone is shown with its reason and a Fix audio action", () => {
+  const v = M.parseState(stateJson({ mic_health: DEGRADED, audio_repair: "munin-audiofix" }));
+  assert.deepEqual(v.mic_health, DEGRADED);
+  assert.equal(M.micDegraded(v), true);
+  assert.equal(M.micReasonText(v), "Headset is connected but has no audio profile");
+  assert.deepEqual(M.fixAudioAction(v), { label: "Fix audio", argv: ["munin-audiofix"] });
+});
+
+test("Fix audio runs the configured argv, split without a shell", () => {
+  const v = M.parseState(
+    stateJson({ mic_health: DEGRADED, audio_repair: "  munin-audiofix   -n headset " }),
+  );
+  assert.deepEqual(M.fixAudioAction(v).argv, ["munin-audiofix", "-n", "headset"]);
+  // It reaches Quickshell through the same wrapper as every other action.
+  assert.deepEqual(M.muninArgv(M.fixAudioAction(v).argv).slice(0, 4),
+    ["bash", "-lc", 'exec "$@"', "bash"]);
+});
+
+test("nothing about the microphone when it is absent, ok or unknown", () => {
+  for (const health of [undefined, null, { state: "ok", label: "Headset" },
+    { state: "unknown" }, { state: "bogus" }, "degraded", []]) {
+    const v = M.parseState(stateJson({ mic_health: health, audio_repair: "munin-audiofix" }));
+    assert.equal(M.micDegraded(v), false, JSON.stringify(health));
+    assert.equal(M.micReasonText(v), "");
+    assert.equal(M.fixAudioAction(v), null);
+  }
+});
+
+test("an empty audio_repair hides Fix audio but not the reason", () => {
+  for (const repair of ["", "   ", undefined, 3]) {
+    const v = M.parseState(stateJson({ mic_health: DEGRADED, audio_repair: repair }));
+    assert.equal(M.micDegraded(v), true);
+    assert.equal(M.fixAudioAction(v), null, String(repair));
+  }
+});
+
+test("every signal has the spec's wording", () => {
+  for (const [reason, text] of [
+    ["node-error", "in an error state"],
+    ["profile-off", "connected but has no audio profile"],
+    ["default-sink-missing", "set as default but no longer exists"],
+  ]) {
+    const v = M.parseState(stateJson({ mic_health: { state: "degraded", reason, label: null } }));
+    assert.equal(M.micReasonText(v), `The microphone is ${text}`);
+  }
+});

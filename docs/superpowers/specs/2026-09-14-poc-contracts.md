@@ -28,6 +28,66 @@ The worker, `backends/base.py` and `pipeline/render.py` exist so that adding a
 real backend later is one module. `backends/none.py` is the only backend the PoC
 ships and it never transcribes.
 
+### Amendment 2026-10-14 (D28 microphone preflight): additive
+
+Spec [`2026-10-14-mic-preflight.md`](2026-10-14-mic-preflight.md), rollout steps
+1-3. A Bluetooth headset left as a WirePlumber *ghost device* (card at profile
+`off`, stale mic node, configured default sink gone) was recorded from as if it
+were healthy. Munin now checks microphone health, not presence, at call
+detection and at every segment start, and ships the repair. Nothing below is
+breaking: every field is additive and `schema_version` stays 1.
+
+| Surface | Before | After |
+|---|---|---|
+| §3 `history[]` | transition rows only | also **event rows**, `{"event", "at", ...}`, no `from`/`to`/`by`: `mic_degraded` (`segment`, `reason`, `label`) when a segment starts degraded; `audio_repaired` (`segment`, the new one) when `munin-audiofix` reported a repair during a live recording and the daemon rolled the segment. Written by `Session.record_event`, which re-reads `history[]` under the lock like `transition` does. No new top-level key |
+| §7.2 `state.json` | — | `mic_health`: `null` before the first check, else `{"state": "ok"\|"degraded"\|"unknown", "reason": <signal>\|null, "label": str\|null, "checked_at": ISO\|null}`; `audio_repair`: `[capture] audio_repair` as loaded |
+| §7.1 IPC `event` | `call-started`, `call-ended` | plus `audio-repaired` (no args; accepted with detection off). Reply adds `rolled`, `segment` (when rolled), `mic_health` |
+| §8 notifications | six rows | seven, below |
+| §9 config | — | `[capture] audio_repair = "munin-audiofix"`, a string, split on whitespace into an argv, never a shell; `""` removes the notification and the panel button, not the check |
+| §10 renderer | — | `mic_degraded_lines(history)`: one `[microphone degraded for segment n: <reason text>]` line per degraded segment, which the worker puts before the transcript. `render_transcript` keeps its signature |
+| §11 CLI | — | `munin status` adds `microphone: degraded (<signal>): <label> is <reason text>` (or `microphone: unknown`) on a second line when not ok; `munin event audio-repaired` |
+| §13 install | `munin`, `munin-rec`, `munin-work` linked into `~/.local/bin` | plus `munin-audiofix`, linked from the repository's `bin/` in step 2; `--uninstall` removes it. A missing `bluetoothctl` is a warning, not a missing requirement |
+| `munin doctor` | 26 rows | 30: `default sink`, `mic health`, `bluetooth profile` (fail on a ghost; `skip` with no Bluetooth card), `bluetoothctl` (warn when missing) |
+
+| When | Urgency | Title / body | Primary action (`--exec`) | Secondaries live in |
+|---|---|---|---|---|
+| Microphone degraded at call detection or capture start | `critical` | "Microphone not working" / "<label> is <reason>. Recording will have no mic audio. Click to fix audio." | `[capture] audio_repair` (`munin-audiofix`) | Panel: *Fix audio*. Sent *in addition to* "Meeting detected", once per call or session; its own `-r` id (session id + `:microphone`), so it never replaces the session's other notifications. Not sent when `audio_repair` is empty |
+
+`<reason>` is `in an error state` (S1), `connected but has no audio profile`
+(S2), `set as default but no longer exists` (S3).
+
+**Ownership.** The check is `munin/capture/health.py` (capture workstream):
+`assess(dump)` is pure; `check()` dispatches through the capture factory to
+`capture/linux.py`'s `mic_health()`, which runs one `pw-dump`. The daemon,
+`default_mic_target(..., warnings=)`, doctor, the CLI and the renderer all read
+the same verdict and the same reason strings; the plugin carries a copy of the
+strings that a test pins.
+
+**Behaviour.** Degraded never refuses a recording (D4). At a segment start the
+reason goes into the capturer's `warnings`, a `mic_degraded` row and
+`mic_health`. A track that dies mid-recording re-runs the check, so
+`mic_health` says why. `munin event audio-repaired` re-checks; while recording
+it ends the segment and starts the next one (the new capturer is started before
+the segment is recorded, so a restart that fails leaves no empty segment and
+the session is finished as for a dead microphone). A `pw-dump` that fails is
+`unknown`, and detection proceeds exactly as before.
+
+**S2 reads the active profile, not the property.** Measured on the healthy
+2026-10-14 14:28 dump: the bluez card's `bluez5.profile` *property* is `"off"`
+while the card plays A2DP. The active profile is `info.params.Profile[0].name`;
+the property is read only when a dump has no `Profile` param. Read literally,
+spec §5.1's S2 row would mark every healthy headset degraded.
+
+**Compliance (spec §12).** Adds to the audit trail (`history[]`), which is the
+intended place: a device label and a reason, no personal data beyond what the
+session already holds.
+
+**Not implemented, and why.** S1 (`node-error`): no fixture exists, and
+`munin-audiofix` snapshots `pw-dump` before every repair so the next ghost
+provides one. What a WirePlumber restart does to a running `pw-record` pinned
+by `object.serial` is not measured; the segment roll is the conservative answer
+until it is (spec §7.2).
+
 ### Amendment 2026-09-24 (M365 naming): additive, export names breaking
 
 The naming half of M9 (spec §7.6), built ahead of M4 because the export name is

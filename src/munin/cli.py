@@ -175,8 +175,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="rename the first half; it keeps the original title otherwise",
     )
 
-    event = sub.add_parser("event", help="feed detection evidence from the plugin")
-    event.add_argument("event", choices=("call-started", "call-ended"))
+    event = sub.add_parser(
+        "event",
+        help="feed detection evidence from the plugin, or report an audio repair",
+    )
+    # audio-repaired is munin-audiofix saying it rebuilt the audio graph (D28):
+    # the daemon re-checks the microphone and, mid-recording, rolls the segment.
+    event.add_argument("event", choices=("call-started", "call-ended", "audio-repaired"))
     event.add_argument("--pid", type=int, default=None)
     event.add_argument("--app", default=None, help="application label, e.g. a meeting client")
     event.add_argument("--app-id", default=None, help="matching rule id, e.g. teams-tab")
@@ -302,7 +307,30 @@ def _cmd_status(args: argparse.Namespace) -> int:
     if data.get("queue_depth"):
         line += f"  queue: {data['queue_depth']}"
     print(line)
+    microphone = _microphone_line(data.get("mic_health"))
+    if microphone:
+        print(microphone)
     return EXIT_OK
+
+
+def _microphone_line(mic_health: Any) -> str | None:
+    """``microphone: degraded (<reason>)`` when the last check was not ok (D28).
+
+    Silent while healthy or before the first check: a status line that always
+    says "microphone: ok" is one more thing to read past.
+    """
+    if not isinstance(mic_health, dict):
+        return None
+    state = mic_health.get("state")
+    if state in (None, "ok"):
+        return None
+    reason = mic_health.get("reason")
+    if state == "degraded":
+        from munin.capture.health import describe_reason
+
+        label = mic_health.get("label") or "the microphone"
+        return f"microphone: degraded ({reason}): {label} is {describe_reason(reason)}"
+    return f"microphone: {state}"
 
 
 def _cmd_list(args: argparse.Namespace) -> int:
@@ -554,7 +582,12 @@ def _cmd_event(args: argparse.Namespace) -> int:
         title=args.title,
         handle=args.handle,
     )
-    print(f"{args.event}: accepted={str(data.get('accepted')).lower()} state={data.get('state')}")
+    line = f"{args.event}: accepted={str(data.get('accepted')).lower()} state={data.get('state')}"
+    if "rolled" in data:
+        line += f" rolled={str(data.get('rolled')).lower()}"
+        if data.get("rolled"):
+            line += f" segment={data.get('segment')}"
+    print(line)
     return EXIT_OK
 
 

@@ -63,7 +63,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import IO, Any, ClassVar, Literal, Sequence
 
-from munin.capture import private_sink
+from munin.capture import health, private_sink
 from munin.capture.base import (
     SYSTEM_OUTPUT_HANDLE,
     CaptureError,
@@ -83,6 +83,7 @@ __all__ = [
     "encode_command",
     "find_source",
     "is_playable",
+    "mic_health",
     "record_command",
     "shutdown_chain",
     "silence_command",
@@ -314,6 +315,7 @@ def default_mic_target(
     mic_source: str = DEFAULT_HANDLE,
     *,
     pw_dump: str = "pw-dump",
+    warnings: list[str] | None = None,
 ) -> CaptureTarget:
     """Resolve the configured microphone to a :class:`CaptureTarget`.
 
@@ -325,8 +327,21 @@ def default_mic_target(
     The *default* source failing to resolve is not: we fall back to the
     unpinned target, which is exactly what ``pw-record`` with no ``--target``
     does anyway.
+
+    Presence is not health (D28): a ghost Bluetooth device leaves a node that
+    resolves perfectly and records silence. The same dump is assessed by
+    :func:`munin.capture.health.assess`, and when the microphone is degraded
+    the reason is appended to ``warnings`` -- the capturer's list, normally.
+    The target is returned either way: a degraded microphone is a warning on
+    the record, never a refusal to record (D4).
     """
     dump = _pw_dump(pw_dump)
+    if warnings is not None:
+        verdict = health.assess(dump, mic_source=mic_source)
+        if verdict.degraded:
+            message = f"microphone degraded: {verdict.sentence()} ({verdict.reason})"
+            if message not in warnings:
+                warnings.append(message)
     if dump is None:
         if mic_source != DEFAULT_HANDLE:
             raise CaptureError(
@@ -342,6 +357,24 @@ def default_mic_target(
             f"microphone {mic_source!r} is not a PipeWire audio source on this machine"
         )
     return CaptureTarget(kind="mic", handle=DEFAULT_HANDLE, label="default source")
+
+
+def mic_health(
+    mic_source: str = DEFAULT_HANDLE,
+    *,
+    pw_dump: str = "pw-dump",
+    now: datetime | None = None,
+) -> health.MicHealth:
+    """One ``pw-dump``, assessed (D28). The seam :func:`health.check` calls.
+
+    Never raises: an unset ``XDG_RUNTIME_DIR``, a missing ``pw-dump`` or one
+    that times out is ``unknown``, and the caller carries on as before.
+    """
+    try:
+        dump = _pw_dump(pw_dump)
+    except CaptureError:
+        dump = None
+    return health.assess(dump, mic_source=mic_source, now=now)
 
 
 def _pw_dump(pw_dump: str) -> list[Any] | None:

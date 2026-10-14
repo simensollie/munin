@@ -23,9 +23,10 @@ computation, not two independent ones that could disagree.
 
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Iterable, Mapping, Sequence
 
 from munin.backends.base import Transcript, TranscriptSegment
+from munin.capture.health import describe_reason
 
 __all__ = [
     "GAP_TEMPLATE",
@@ -33,9 +34,38 @@ __all__ = [
     "gap_line",
     "render_transcript",
     "adjust_segments",
+    "MIC_DEGRADED_TEMPLATE",
+    "mic_degraded_lines",
 ]
 
 GAP_TEMPLATE = "[{ts}] --- recording resumed (gap {minutes} min) ---"
+
+#: Prefixed to the transcript once per segment ``history[]`` marks as captured
+#: from a degraded microphone (D28), so a transcript of silence on the user's
+#: side does not pass for a quiet meeting.
+MIC_DEGRADED_TEMPLATE = "[microphone degraded for segment {segment}: {reason}]"
+
+
+def mic_degraded_lines(history: Iterable[Mapping[str, Any]]) -> list[str]:
+    """One :data:`MIC_DEGRADED_TEMPLATE` line per degraded segment, in order.
+
+    Reads the ``mic_degraded`` event rows of ``session.json``'s ``history[]``
+    and ignores everything else, transitions included. Additional surface,
+    like :func:`adjust_segments`: ``render_transcript`` keeps its contracted
+    signature and the worker puts these lines in front of its output.
+    """
+    lines: list[str] = []
+    seen: set[Any] = set()
+    for row in history or ():
+        if not isinstance(row, Mapping) or row.get("event") != "mic_degraded":
+            continue
+        segment = row.get("segment")
+        if segment in seen:
+            continue
+        seen.add(segment)
+        reason = describe_reason(row.get("reason")) or "unknown reason"
+        lines.append(MIC_DEGRADED_TEMPLATE.format(segment=segment, reason=reason))
+    return lines
 
 
 def format_timestamp(seconds: float) -> str:
