@@ -108,6 +108,28 @@ def test_discard_reports_the_deletion(fake_ipc, capsys) -> None:
     assert "audio deleted" in out
 
 
+def test_discard_that_left_audio_behind_says_so(fake_ipc, capsys) -> None:
+    fake_ipc({"session_id": "2026-09-14T1325-x", "session": "/tmp/x",
+              "duration_seconds": 61.0, "state": "discarded",
+              "deleted": ["app.opus"], "remaining": ["mic.opus"],
+              "error": "discard left audio on disk: mic.opus"})
+    assert cli.main(["discard"]) == cli.EXIT_OK
+    out = capsys.readouterr().out
+    assert "audio partly deleted" in out
+    assert "audio deleted, record kept" not in out
+    assert "still on disk: mic.opus in /tmp/x" in out
+
+
+def test_list_marks_a_discard_that_left_audio_behind(fake_ipc, capsys) -> None:
+    fake_ipc({"sessions": [
+        {"id": "2026-09-14T1325-x", "state": "discarded", "title": "x",
+         "started_at": None, "duration_seconds": 61.0, "path": "/tmp/x",
+         "pending_reason": None, "audio_remaining": ["mic.opus"]},
+    ]})
+    assert cli.main(["list"]) == cli.EXIT_OK
+    assert "(audio partly deleted: mic.opus)" in capsys.readouterr().out
+
+
 def test_discard_without_a_recording_exits_four(fake_ipc, capsys) -> None:
     fake_ipc(IpcError("not_recording", "nothing is being recorded"))
     assert cli.main(["discard"]) == cli.EXIT_PRECONDITION

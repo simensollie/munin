@@ -283,7 +283,8 @@ def test_list_reports_what_the_plugin_needs(harness: Harness) -> None:
     assert len(payload["sessions"]) == 1
     row = payload["sessions"][0]
     assert set(row) == {
-        "id", "state", "title", "started_at", "duration_seconds", "path", "pending_reason"
+        "id", "state", "title", "started_at", "duration_seconds", "path", "pending_reason",
+        "audio_remaining",
     }
     assert row["id"] == started["session_id"]
     assert row["state"] == "captured"

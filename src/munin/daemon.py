@@ -577,6 +577,8 @@ class Daemon:
             float(getattr(seg, "duration_seconds", 0.0) or 0.0) for seg in segments
         )
         deleted: list[str] = []
+        #: Tracks still on disk after the attempt, with the reason each stayed.
+        remaining: list[tuple[str, str]] = []
         for segment in segments:
             for name in (getattr(segment, "mic", None), getattr(segment, "app", None)):
                 if not name:
@@ -587,18 +589,26 @@ class Daemon:
                 except FileNotFoundError:
                     continue
                 except OSError as exc:
-                    # Say so and carry on: a track that will not delete must not
-                    # leave the daemon holding a dead capturer in "recording".
+                    # Carry on to the other tracks: one that will not delete
+                    # must not leave the daemon holding a dead capturer in
+                    # "recording". But it is *not* deleted, and the record,
+                    # the reply and the bar all have to say so -- "audio
+                    # deleted" on a session whose audio is still there is the
+                    # one thing a discard must never claim (D27).
                     log.error("could not delete %s error=%s", path, exc)
+                    remaining.append((name, str(exc)))
                     continue
                 deleted.append(name)
 
+        note = "discarded by the user; audio deleted: " + (", ".join(deleted) or "none")
+        error: str | None = None
+        if remaining:
+            kept = ", ".join(f"{name} ({reason})" for name, reason in remaining)
+            note += "; could not delete: " + kept
+            error = "discard left audio on disk: " + ", ".join(name for name, _ in remaining)
+
         self.inhibit_idle(False)
-        self._transition(
-            session,
-            "discarded",
-            note="discarded by the user; audio deleted: " + (", ".join(deleted) or "none"),
-        )
+        self._transition(session, "discarded", note=note)
         try:
             self.spool.unlink_inbox(session)
         except Exception as exc:  # noqa: BLE001 - the inbox is an index, not the record
@@ -612,6 +622,8 @@ class Daemon:
             "state": "discarded",
             "duration_seconds": duration,
             "deleted": deleted,
+            "remaining": [name for name, _ in remaining],
+            "error": error,
         }
 
         # Nothing was captured, so the bar has no session to point at. The call
@@ -631,7 +643,9 @@ class Daemon:
         self.state.session_id = None
         self.state.segment = 0
         self.state.grace_deadline = None
-        self.state.last_error = None
+        # A deletion that failed is the one thing worth keeping on the bar
+        # after the session is gone from it.
+        self.state.last_error = error
         self._refresh_queue_depth()
         self._write_state()
 
@@ -848,9 +862,25 @@ class Daemon:
                     "duration_seconds": getattr(session, "duration_seconds", None),
                     "path": str(getattr(session, "directory", "")),
                     "pending_reason": getattr(session, "pending_reason", None),
+                    # Tracks a discard could not delete (D27). Read from disk,
+                    # because that is the fact the bar is about to state.
+                    "audio_remaining": self._audio_remaining(session),
                 }
             )
         return {"sessions": sessions}
+
+    @staticmethod
+    def _audio_remaining(session: Any) -> list[str]:
+        """Track files still on disk for a ``discarded`` session, else ``[]``."""
+        if getattr(session, "state", None) != "discarded":
+            return []
+        directory = Path(getattr(session, "directory", ""))
+        names: list[str] = []
+        for segment in getattr(session, "segments", []) or []:
+            for name in (getattr(segment, "mic", None), getattr(segment, "app", None)):
+                if name and (directory / name).exists():
+                    names.append(name)
+        return names
 
     # --- detection events ------------------------------------------------
     def on_call_started(

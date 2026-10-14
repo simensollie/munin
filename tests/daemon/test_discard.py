@@ -139,3 +139,61 @@ def test_discard_survives_a_capturer_that_fails_to_stop(harness: Harness) -> Non
     assert reply["deleted"] == []
     assert harness.session_json(sid)["state"] == "discarded"
     assert daemon.is_recording is False
+
+
+def test_a_track_that_will_not_delete_is_reported_not_claimed_gone(
+    harness: Harness, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A discard that leaves audio behind must say so everywhere it speaks.
+
+    The session is still discarded (D27: the record stays), but the reply, the
+    history note and the bar all carry what is still on disk. "Audio deleted"
+    over audio that is not would be the one lie a discard can tell.
+    """
+    from pathlib import Path
+
+    daemon, clock = harness.daemon, harness.clock
+    sid = daemon.handle_start({"title": "Quality sync"})["session_id"]
+    clock.advance(30)
+    real_unlink = Path.unlink
+
+    def denied(self: Path, *args, **kwargs):
+        if self.name == "mic.opus":
+            raise PermissionError(13, "Permission denied", str(self))
+        return real_unlink(self, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "unlink", denied)
+
+    reply = daemon.handle_discard({})
+
+    assert reply["state"] == "discarded"
+    assert reply["deleted"] == ["app.opus"]
+    assert reply["remaining"] == ["mic.opus"]
+    assert "mic.opus" in reply["error"]
+    mic, app = _audio_paths(harness, sid)
+    assert mic.exists() and not app.exists()
+
+    record = harness.session_json(sid)
+    assert record["state"] == "discarded"
+    note = record["history"][-1]["note"]
+    assert "audio deleted: app.opus" in note
+    assert "could not delete: mic.opus (" in note
+    assert "Permission denied" in note
+
+    state = harness.state_json()
+    assert state["state"] == "idle"
+    assert state["last_error"] and "mic.opus" in state["last_error"]
+
+    listed = daemon.handle_list({"limit": 5})["sessions"][0]
+    assert listed["state"] == "discarded"
+    assert listed["audio_remaining"] == ["mic.opus"]
+
+
+def test_a_clean_discard_leaves_nothing_remaining(harness: Harness) -> None:
+    daemon = harness.daemon
+    daemon.handle_start({"title": "Quality sync"})
+    reply = daemon.handle_discard({})
+    assert reply["remaining"] == []
+    assert reply["error"] is None
+    assert harness.state_json()["last_error"] is None
+    assert daemon.handle_list({"limit": 5})["sessions"][0]["audio_remaining"] == []
