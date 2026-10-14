@@ -1305,6 +1305,11 @@ class Daemon:
         self.state.started_at = getattr(segment, "started_at", None) or self.clock()
         self._mic_check_at_segment_start(session, capturer, index)
         self._write_state()
+        # The rebuilt graph can lose the app's isolated stream exactly as a
+        # fresh start can, and the people in the desktop mix are no more in
+        # the meeting after a repair than before one (spec 12): same warning,
+        # same moment, the same way handle_start does it.
+        self._warn_if_capture_widened(capturer, app)
         log.info(
             "segment rolled after an audio repair session=%s segment=%d",
             getattr(session, "id", None),

@@ -182,6 +182,51 @@ def test_audio_repaired_while_recording_rolls_the_segment(harness: Harness) -> N
     assert stopped["duration_seconds"] == 180
 
 
+def test_a_roll_that_widens_the_capture_says_so_like_a_start_does(harness: Harness) -> None:
+    """spec 12: the repair rebuilds the graph, and isolation can fail again.
+
+    Every start warns when the app track fell back to the desktop mix. The
+    roll after a repair restarts capture too, so it has to warn the same way,
+    or the fallback happens with nobody told until ``app_source`` is read
+    afterwards.
+    """
+    from .fakes import FakeCapturer
+
+    daemon = harness.daemon
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    assert "Recording all desktop audio" not in harness.titles()
+    harness.clock.advance(30)
+
+    def widened(mic, app):
+        capturer = FakeCapturer(mic, app, clock=harness.clock)
+        capturer.app_source = "sink-monitor"
+        return capturer
+
+    daemon.capturer_factory = widened  # type: ignore[assignment]
+    reply = daemon.handle_event({"event": "audio-repaired"})
+
+    assert reply["rolled"] is True and reply["segment"] == 2
+    assert harness.titles()[-1] == "Recording all desktop audio"
+    assert harness.notifications[-1].urgency == "critical"
+    assert daemon.state.state == "recording", "a warning is not a failure"
+    assert "not an isolated stream" in (harness.state_json()["last_error"] or "")
+
+
+def test_a_roll_that_keeps_isolation_says_nothing(harness: Harness) -> None:
+    daemon = harness.daemon
+    daemon.handle_event(
+        {"event": "call-started", "pid": 4242, "app": "Beacon 365", "handle": "9911"}
+    )
+    daemon.handle_start({"from_detection": True})
+    harness.clock.advance(30)
+    reply = daemon.handle_event({"event": "audio-repaired"})
+    assert reply["rolled"] is True
+    assert "Recording all desktop audio" not in harness.titles()
+
+
 def test_audio_repaired_that_did_not_help_marks_the_new_segment(harness: Harness) -> None:
     harness.mic.degrade()
     started = harness.daemon.handle_start({"title": "Weekly quality sync"})
