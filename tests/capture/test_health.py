@@ -60,7 +60,7 @@ def test_s3_alone_default_sink_missing() -> None:
 
 def test_s2_reported_first_when_both_hold() -> None:
     objects = dump("ghost-s2")
-    assert health.configured_default_sink(objects) == "bluez_output.AA_BB_CC_DD_EE_FF.1"
+    assert health.default_sink(objects) == "bluez_output.AA_BB_CC_DD_EE_FF.1"
     verdict = assess(objects, now=NOW)
     assert verdict.state == "degraded"
     assert verdict.reason == "profile-off"
@@ -76,6 +76,36 @@ def test_s2_alone() -> None:
                     row["value"] = {"name": "alsa_output.pci-0000_00_1f.3.analog-stereo"}
     verdict = assess(objects, now=NOW)
     assert verdict.reason == "profile-off"
+
+
+def test_a_preference_for_an_absent_device_is_not_a_signal() -> None:
+    """2026-10-19 09:20: the preferred headset was switched off, another one
+    was connected and carrying the audio. Preference on the absent device,
+    effective default on the present one. Healthy -- and the check as first
+    written said ghost, and the repair restarted WirePlumber under a live call.
+    """
+    objects = copy.deepcopy(dump("healthy-bluetooth"))
+    for obj in objects:
+        if obj["type"].endswith(":Metadata"):
+            for row in obj["metadata"]:
+                if row["key"] == "default.configured.audio.sink":
+                    row["value"] = {"name": "bluez_output.11_22_33_44_55_66.1"}
+                if row["key"] == "default.configured.audio.source":
+                    row["value"] = {"name": "bluez_input.11:22:33:44:55:66"}
+    verdict = assess(objects, now=NOW)
+    assert verdict.state == "ok"
+    assert health.configured_default_sink(objects) == "bluez_output.11_22_33_44_55_66.1"
+    assert health.default_sink(objects) == "bluez_output.AA_BB_CC_DD_EE_FF.1"
+
+
+def test_the_effective_default_naming_a_ghost_is_the_signal() -> None:
+    objects = copy.deepcopy(dump("healthy-bluetooth"))
+    for obj in objects:
+        if obj["type"].endswith(":Metadata"):
+            for row in obj["metadata"]:
+                if row["key"] == "default.audio.sink":
+                    row["value"] = {"name": "bluez_output.11_22_33_44_55_66.1"}
+    assert assess(objects, now=NOW).reason == "default-sink-missing"
 
 
 def test_a_disconnected_card_at_off_is_not_a_signal() -> None:

@@ -343,22 +343,33 @@ def check_default_sink(env: DoctorEnv) -> CheckResult:
     objects, problem = _pw_dump(env)
     if problem:
         return CheckResult("default sink", "fail", problem)
-    name = health.configured_default_sink(objects)
+    name = health.default_sink(objects)
     if name is None:
         return CheckResult(
-            "default sink", "warn", "no default.configured.audio.sink in the default metadata"
+            "default sink", "warn", "no default.audio.sink in the default metadata"
         )
+    names: dict[str, str] = {}
     for obj in objects:
         if obj.get("type") != "PipeWire:Interface:Node":
             continue
         props = _props(obj)
-        if props.get("node.name") == name:
-            label = props.get("node.description") or name
-            return CheckResult("default sink", "ok", f"{label} ({name})")
+        node = props.get("node.name")
+        if node:
+            names[str(node)] = str(props.get("node.description") or node)
+    if name in names:
+        detail = f"{names[name]} ({name})"
+        preferred = health.configured_default_sink(objects)
+        if preferred and preferred != name and preferred not in names:
+            # The preference is on a device that is not here (switched off,
+            # most likely). Audio is routed to `name`, so this is fine; said
+            # so the user is not surprised when the preferred one comes back
+            # and takes over.
+            detail += f"; preferred {preferred} is not present"
+        return CheckResult("default sink", "ok", detail)
     return CheckResult(
         "default sink",
         "fail",
-        f"configured default {name!r} no longer exists (a ghost device); {REPAIR_HINT}",
+        f"default {name!r} no longer exists (a ghost device); {REPAIR_HINT}",
     )
 
 

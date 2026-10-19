@@ -16,6 +16,6 @@ dump. The active profile is `info.params.Profile`, which is what S2 reads.
 | File | Derived how | Expected |
 |---|---|---|
 | `healthy-bluetooth.json` | the snapshot | `ok`, label `Headset` |
-| `ghost-s3.json` | the default sink node (`bluez_output.AA_BB_CC_DD_EE_FF.1`) removed | `degraded`, `default-sink-missing` alone |
+| `ghost-s3.json` | the default sink node (`bluez_output.AA_BB_CC_DD_EE_FF.1`) removed; both `default.audio.sink` and `default.configured.audio.sink` still name it | `degraded`, `default-sink-missing` alone (S3 reads the effective `default.audio.sink`; the configured one is a preference and never a signal) |
 | `ghost-s2.json` | the card's active profile set to `off`, still `connected`, both Bluetooth nodes removed | `degraded`, `profile-off` (S3 also holds; S2 is checked first) |
 | `ghost-s1.json` | **pending**: no dump was taken while a ghost existed | — |

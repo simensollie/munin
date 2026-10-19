@@ -27,9 +27,16 @@ the reason names the first that fired:
   property read ``"off"`` while the card was playing A2DP. Only when a dump
   carries no ``Profile`` param does the property stand in.
 - **S3 ``default-sink-missing``**: the ``default`` metadata object's
-  ``default.configured.audio.sink`` names a node absent from the dump.
-  WirePlumber keeps the configured default after the node is gone, which
-  makes this the signal most likely to fire first, and the cheapest.
+  ``default.audio.sink`` -- the *effective* default, the one applications are
+  routed to -- names a node absent from the dump. WirePlumber keeps it
+  pointing at a ghost after the node is gone, which makes this the signal
+  most likely to fire first, and the cheapest. ``default.configured.audio.sink``
+  is **not** it: that is the user's preference, and it names an absent device
+  whenever the preferred headset is simply switched off while another one is
+  in use. Measured 2026-10-19 09:20: preference on a powered-off headset,
+  effective default on the connected one, audio healthy -- and the check as
+  first written fired, and the repair it offered restarted WirePlumber under
+  a live call.
 
 A muted or 0 % sink is not a signal: that is a user choice.
 
@@ -56,6 +63,7 @@ __all__ = [
     "bluez_cards",
     "check",
     "configured_default_sink",
+    "default_sink",
     "describe_reason",
 ]
 
@@ -161,8 +169,18 @@ def _default_metadata(dump: Sequence[Mapping[str, Any]], key: str) -> str | None
     return None
 
 
+def default_sink(dump: Iterable[Any]) -> str | None:
+    """``default.audio.sink``'s node name (the effective default), or ``None``."""
+    return _default_metadata(_objects(dump), "default.audio.sink")
+
+
 def configured_default_sink(dump: Iterable[Any]) -> str | None:
-    """``default.configured.audio.sink``'s node name, or ``None``."""
+    """``default.configured.audio.sink``'s node name, or ``None``.
+
+    The user's *preference*, not what applications are routed to. It is not a
+    health signal (see S3 in the module docstring); doctor shows it for
+    information only.
+    """
     return _default_metadata(_objects(dump), "default.configured.audio.sink")
 
 
@@ -278,7 +296,7 @@ def assess(
                 checked_at=checked_at,
             )
 
-    sink = configured_default_sink(objects)
+    sink = default_sink(objects)
     if sink and sink not in _node_names(objects):
         return MicHealth(
             state="degraded",

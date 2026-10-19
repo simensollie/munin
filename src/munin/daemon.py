@@ -76,6 +76,13 @@ MIN_SPLIT_SECONDS = 5.0
 #: Cheap by construction -- :meth:`Capturer.failed_tracks` spawns nothing -- but
 #: there is no point asking more often than a track can plausibly fail.
 HEALTH_POLL_SECONDS = 5.0
+#: How long a degraded verdict at call detection has to hold before it is
+#: notified. A headset switching from music to call mode destroys and
+#: recreates its sink; a dump taken inside that window shows the effective
+#: default naming a node that is not there yet (measured 2026-10-19 09:20:39,
+#: twenty seconds after a repair). One re-check after this delay tells a
+#: ghost from a switch, and costs the user nothing they would notice.
+MIC_CONFIRM_SECONDS = 3.0
 
 #: The runtime states ``state.json`` may carry (contracts section 7.2).
 RUNTIME_STATES: tuple[str, ...] = (
@@ -362,6 +369,8 @@ class Daemon:
         self._last_poll: datetime | None = None
         self._last_health_poll: datetime | None = None
         self._health_warned: set[str] = set()
+        #: When a degraded verdict at detection is due its confirming re-check.
+        self._mic_confirm_at: datetime | None = None
         self._last_state_write: datetime | None = None
         #: Whether "Microphone not working" has been sent for the call or the
         #: session in hand. Once per session (spec 2026-10-14 section 5.3): a
@@ -942,9 +951,12 @@ class Daemon:
             )
             # D28: in addition to "Meeting detected", never instead. The user
             # still decides whether to record; they decide knowing the mic is
-            # dead, while there is still time to fix it.
+            # dead, while there is still time to fix it. Not yet, though: a
+            # headset mid profile-switch looks like a ghost for a moment, and
+            # the repair behind the click restarts WirePlumber, which is no
+            # small thing under a live call. tick() re-checks first.
             if verdict is not None and verdict.degraded:
-                self._notify_mic(verdict, session_id=None)
+                self._mic_confirm_at = self.clock() + timedelta(seconds=MIC_CONFIRM_SECONDS)
         log.info("call detected pid=%s app=%s", pid, detected["label"])
         return True
 
@@ -1150,6 +1162,29 @@ class Daemon:
             )
         return verdict
 
+    def _confirm_mic(self, now: datetime) -> None:
+        """The re-check a degraded verdict at detection waits for (D28).
+
+        Still degraded after ``MIC_CONFIRM_SECONDS``: notify. Healthy again: it
+        was a profile switch, and the state file already says ``ok``. A call
+        that ended, or a recording that started (and checked for itself),
+        drops the pending re-check.
+        """
+        if self._mic_confirm_at is None:
+            return
+        if self._detected is None or self.session is not None:
+            self._mic_confirm_at = None
+            return
+        if now < self._mic_confirm_at:
+            return
+        self._mic_confirm_at = None
+        verdict = self._check_mic()
+        self._write_state()
+        if verdict.degraded:
+            self._notify_mic(verdict, session_id=None)
+        else:
+            log.info("microphone recovered before the re-check; no notification")
+
     def _notify_mic(self, verdict: MicHealth, *, session_id: str | None) -> None:
         """*Microphone not working*, once per call or session, if a repair is set."""
         if self._mic_warned:
@@ -1321,6 +1356,7 @@ class Daemon:
     def tick(self, *, now: datetime | None = None) -> None:
         """One pass of the timers: grace period, warning, resume window, poll."""
         current = now or self.clock()
+        self._confirm_mic(current)
         if self.state.state == "ending" and self._ending_since is not None:
             elapsed = (current - self._ending_since).total_seconds()
             grace = self.config.detection.grace_seconds
